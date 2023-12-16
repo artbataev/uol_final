@@ -1,0 +1,4 @@
+isort>5.1.0,<6.0.0
+# black~=23.0
+
+nemo_toolkit[all]==1.21.0
