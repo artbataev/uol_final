@@ -41,9 +41,7 @@ class MinPredictionNetwork(nn.Module):
             forget_gate_bias=1.0,
         )
 
-    def forward(
-        self, input_prefix: torch.Tensor, input_lengths: torch.Tensor, state=None, add_sos: bool = True
-    ):
+    def forward(self, input_prefix: torch.Tensor, input_lengths: torch.Tensor, state=None, add_sos: bool = True):
         batch_size = input_prefix.shape[0]
         if add_sos:
             input_prefix = torch.cat(
