@@ -102,6 +102,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         hyps_str = [self.tokenizer.ids_to_text(current_hyp) for current_hyp in hyps]
         batch_size = targets.shape[0]
         refs_str = [self.tokenizer.ids_to_text(targets[i, : targets_lengths[i]].tolist()) for i in range(batch_size)]
+        logging.info(f"val ref: {refs_str[0]}")
+        logging.info(f"val hyp: {hyps_str[0]}")
         self.val_wer[dataloader_idx].update(preds=hyps_str, target=refs_str)
 
     def on_validation_epoch_start(self):
@@ -109,7 +111,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.val_wer = [WordErrorRate() for _ in range(num_val_loaders)]
 
     def multi_validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0):
-        return {"val_wer": self.val_wer[dataloader_idx].compute()}
+        return {"log": {"val_wer": self.val_wer[dataloader_idx].compute()}}
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         raise NotImplementedError  # TODO

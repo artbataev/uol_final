@@ -82,27 +82,28 @@ class RNNTDecodingWrapper(nn.Module):
                 if blank_mask.all():
                     all_blank_found = True
                 else:
-                    blank_indices = (blank_mask == True).nonzero(as_tuple=False).squeeze(1)
                     non_blank_indices = (blank_mask == False).nonzero(as_tuple=False).squeeze(1)
                     for i in non_blank_indices.tolist():
                         hyps[i].append(labels[i].item())
+                    symbols_added += 1
 
-                    # logging.warning(f"Updating state {[sub_state.shape for sub_state in state]}")
-                    if blank_mask.any():
-                        if prev_state is not None:
-                            if isinstance(state, tuple):
-                                for i, sub_state in enumerate(state):
-                                    sub_state[:, blank_indices] = prev_state[i][:, blank_indices]
-                            else:
-                                raise NotImplementedError
+                # logging.warning(f"Updating state {[sub_state.shape for sub_state in state]}")
+                if blank_mask.any():
+                    blank_indices = (blank_mask == True).nonzero(as_tuple=False).squeeze(1)
+                    if prev_state is not None:
+                        if isinstance(state, tuple):
+                            for i, sub_state in enumerate(state):
+                                sub_state[:, blank_indices] = prev_state[i][:, blank_indices]
                         else:
-                            if isinstance(state, tuple):
-                                for i, sub_state in enumerate(state):
-                                    sub_state[:, blank_indices] = 0.0
-                            else:
-                                raise NotImplementedError
+                            raise NotImplementedError
+                    else:
+                        if isinstance(state, tuple):
+                            for i, sub_state in enumerate(state):
+                                sub_state[:, blank_indices] = 0.0
+                        else:
+                            raise NotImplementedError
 
                     labels[blank_indices] = last_label[blank_indices]
-                    last_label = labels.clone()
-                    symbols_added += 1
+                last_label = labels.clone()
+
         return hyps
