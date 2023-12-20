@@ -48,16 +48,16 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.val_wer: List[WordErrorRate] = []
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
-        logging.warning(f"audio: {audio.shape}, expecte BxT")
+        # logging.warning(f"audio: {audio.shape}, expected BxT")
         audio_features, audio_features_lengths = self.preprocessor(
             input_signal=audio,
             length=audio_lengths,
         )
-        logging.warning(f"audio_features: {audio_features.shape}, expected BxDxT")
+        # logging.warning(f"audio_features: {audio_features.shape}, expected BxDxT")
         if self.spec_aug is not None and self.training:
             audio_features = self.spec_aug(input_spec=audio_features, length=audio_features_lengths)
         encoded_audio, encoded_audio_lengths = self.encoder(audio_signal=audio_features, length=audio_features_lengths)
-        logging.warning(f"encoded audio {encoded_audio.shape}, expected BxDxT")
+        # logging.warning(f"encoded audio {encoded_audio.shape}, expected BxDxT")
         return encoded_audio, encoded_audio_lengths
 
     def training_step(self, batch, batch_nb):
@@ -108,9 +108,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         num_val_loaders = len(self._validation_dl) if isinstance(self._validation_dl, list) else 1
         self.val_wer = [WordErrorRate() for _ in range(num_val_loaders)]
 
-    def multi_validation_epoch_end(
-        self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0
-    ) -> Optional[Dict[str, Dict[str, torch.Tensor]]]:
+    def multi_validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0):
         return {"val_wer": self.val_wer[dataloader_idx].compute()}
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
