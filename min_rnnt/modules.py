@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from nemo.collections.common.parts.rnn import LSTMDropout
+from nemo.utils import logging
 
 
 class MinJoint(nn.Module):
@@ -53,9 +54,10 @@ class MinPredictionNetwork(nn.Module):
                         dtype=input_prefix.dtype,
                     ),
                     input_prefix,
-                ]
+                ],
+                dim=-1,
             )
         # TODO: packed sequence
         input_prefix_embed = self.embedding(input_prefix)
-        output, state = self.rnn(input_prefix_embed, state)
-        return output, state
+        output, state = self.rnn(input_prefix_embed.transpose(0, 1), state)
+        return output.transpose(0, 1), state

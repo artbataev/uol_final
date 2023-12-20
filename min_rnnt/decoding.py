@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional
 
 import torch
@@ -35,20 +36,20 @@ class RNNTDecodingWrapper(nn.Module):
 
     def greedy_decode(
         self,
-        encoder_output: torch.Tensor,
+        encoder_output: torch.Tensor,  # [B, D, T]
         encoder_lengths: torch.Tensor,
     ) -> List[List[int]]:
-        # encoder_output: [B, T, D]
-        batch_size = encoder_output.shape[0]
+        encoder_output = encoder_output.permute(2, 0, 1)  # T, B, D
+        max_time, batch_size, _ = encoder_output.shape
+        # logging.warning(f"B {batch_size}, T {max_time}")
         hyps = [[] for _ in range(batch_size)]
 
         state = None
         device = encoder_output.device
         last_label = torch.full([batch_size], fill_value=self.blank_index, dtype=torch.long, device=device)
-        # blank_mask = torch.full([batch_size], fill_value=False, dtype=torch.bool, device=device)
 
-        for time_i in range(encoder_output.shape[1]):
-            encoder_vec = encoder_output[:, time_i]
+        for time_i in range(max_time):
+            encoder_vec = encoder_output[time_i]
 
             all_blank_found = False
             symbols_added = 0
@@ -56,36 +57,52 @@ class RNNTDecodingWrapper(nn.Module):
             while not all_blank_found and (
                 self.max_symbols_per_step is None or symbols_added < self.max_symbols_per_step
             ):
-                blank_mask_prev = blank_mask.clone()
+                # blank_mask_prev = blank_mask.clone()
                 prev_state = state
                 prediction_output, state = self.prediction_network(
-                    input_prefix=last_label, input_lengths=torch.ones_like(last_label), state=state, add_sos=False
+                    input_prefix=last_label.unsqueeze(1),
+                    input_lengths=torch.ones_like(last_label),
+                    state=state,
+                    add_sos=False,
                 )
+                # logging.warning(f"prediction_output {prediction_output.shape}")
+                # logging.warning(f"{state[0].shape}")
 
-                logp = (
-                    self.joint(encoder_output=encoder_vec, prediction_output=prediction_output).squeeze(1).squeeze(1)
+                joint_output = (
+                    self.joint(encoder_output=encoder_vec.unsqueeze(1), prediction_output=prediction_output)
+                    .squeeze(1)
+                    .squeeze(1)
                 )
-                _, labels = logp.max(1)
+                # logging.warning(f"Joint: {joint_output.shape}")
+                labels = joint_output.argmax(dim=1)
 
                 blank_mask.bitwise_or_(labels == self.blank_index)
-                blank_mask_prev.bitwise_or_(blank_mask)
+                # blank_mask_prev.bitwise_or_(blank_mask)
 
                 if blank_mask.all():
                     all_blank_found = True
                 else:
-                    blank_indices = (blank_mask == 1).nonzero(as_tuple=False)
-                    # TODO: check first symbol
-                    if prev_state is not None:
-                        if isinstance(state, tuple):
-                            for i, sub_state in enumerate(state):
-                                sub_state[blank_indices] = prev_state[i][blank_indices]
+                    blank_indices = (blank_mask == True).nonzero(as_tuple=False).squeeze(1)
+                    non_blank_indices = (blank_mask == False).nonzero(as_tuple=False).squeeze(1)
+                    for i in non_blank_indices.tolist():
+                        hyps[i].append(labels[i].item())
+
+                    # logging.warning(f"Updating state {[sub_state.shape for sub_state in state]}")
+                    if blank_mask.any():
+                        if prev_state is not None:
+                            if isinstance(state, tuple):
+                                for i, sub_state in enumerate(state):
+                                    sub_state[:, blank_indices] = prev_state[i][:, blank_indices]
+                            else:
+                                raise NotImplementedError
                         else:
-                            raise NotImplementedError
+                            if isinstance(state, tuple):
+                                for i, sub_state in enumerate(state):
+                                    sub_state[:, blank_indices] = 0.0
+                            else:
+                                raise NotImplementedError
 
                     labels[blank_indices] = last_label[blank_indices]
                     last_label = labels.clone()
-
-                    for batch_i, label in enumerate(labels.tolist()):
-                        hyps[batch_i].append(label)
                     symbols_added += 1
         return hyps
