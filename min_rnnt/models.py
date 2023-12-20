@@ -30,10 +30,15 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.spec_aug = SpectrogramAugmentation(**cfg.spec_augment) if cfg.spec_augment else None
         self.encoder = ConformerEncoder(**cfg.encoder)
 
-        prediction_network = MinPredictionNetwork(**cfg.prediction_network)
-        joint = MinJoint(**cfg.joint)
+        self.cfg.prediction_network["vocab_size"] = vocabulary_size
+        prediction_network = MinPredictionNetwork(**self.cfg.prediction_network)
+        self.cfg.joint["output_size"] = vocabulary_size + 1  # vocab + blank
+        joint = MinJoint(**self.cfg.joint)
         self.decoding = RNNTDecodingWrapper(
-            prediction_network=prediction_network, joint=joint, blank_index=self.blank_index, max_symbols_per_step=10
+            prediction_network=prediction_network,
+            joint=joint,
+            blank_index=self.blank_index,
+            max_symbols_per_step=self.cfg.decoding.get("max_symbols", 10),
         )
         self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         self.wer = WordErrorRate()
@@ -114,6 +119,9 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         val_data_config["shuffle"] = False
         self._validation_dl = self._setup_dataloader_from_config(config=val_data_config)
 
+    def setup_test_data(self, test_data_config: Union[DictConfig, Dict]):
+        pass
+
     def _setup_dataloader_from_config(self, config: Optional[Dict]):
         dataset = audio_to_text_dataset.get_audio_to_text_bpe_dataset_from_config(
             config=config,
@@ -149,3 +157,6 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             num_workers=config.get("num_workers", 0),
             pin_memory=config.get("pin_memory", False),
         )
+
+    def transcribe(self, paths2audio_files: List[str], batch_size: int = 4, verbose: bool = True) -> List[str]:
+        raise NotImplementedError

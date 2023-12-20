@@ -30,7 +30,7 @@ model:
   sample_rate: 16000
 
   model_defaults:
-    enc_hidden: ${model.encoder.d_model}
+    d_model: 512
     pred_hidden: 640
     joint_hidden: 640
 
@@ -96,7 +96,7 @@ model:
     feat_in: ${model.preprocessor.features}
     feat_out: -1 # you may set it if you need different output size other than the default d_model
     n_layers: 17
-    d_model: 512
+    d_model: ${model.model_defaults.d_model}
 
     # Sub-sampling parameters
     subsampling: dw_striding # vggnet, striding, stacking or stacking_norm, dw_striding
@@ -143,13 +143,13 @@ model:
     stochastic_depth_start_layer: 1
 
   prediction_network:
-    pred_hidden: ${model.model_defaults.pred_hidden}
-    pred_rnn_layers: 1
+    hidden_dim: ${model.model_defaults.pred_hidden}
+    num_layers: 1
     dropout: 0.2
 
   joint:
-    encoder_output_dim: 1
-    prediction_output_dim: 1
+    encoder_output_dim: ${model.encoder.d_model}
+    prediction_output_dim: ${model.prediction_network.hidden_dim}
     joint_hidden_dim: ${model.model_defaults.joint_hidden}
     dropout: 0.2
 
