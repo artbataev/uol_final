@@ -74,7 +74,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
 
         assert self.trainer is not None, "Trainer should be set if training_step is called"
         detailed_logs = dict()
-        detailed_logs["train_loss"] = loss_value
+        detailed_logs["train_loss"] = loss_value.item()
         detailed_logs["learning_rate"] = self._optimizer.param_groups[0]["lr"]
         detailed_logs["global_step"] = self.trainer.global_step
         sample_id = self.trainer.global_step

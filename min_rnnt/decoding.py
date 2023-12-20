@@ -23,15 +23,17 @@ class RNNTDecodingWrapper(nn.Module):
 
     def forward(
         self,
-        encoder_output: torch.Tensor,
+        encoder_output: torch.Tensor,  # BxDxT
         encoder_lengths: torch.Tensor,
         targets: torch.Tensor,
         target_lengths: torch.Tensor,
     ):
-        prediction_network_output = self.prediction_network(
+        prediction_network_output, _ = self.prediction_network(
             input_prefix=targets, input_lengths=target_lengths, add_sos=True
         )
-        joint_output = self.joint(encoder_output=encoder_output, prediction_output=prediction_network_output)
+        joint_output = self.joint(
+            encoder_output=encoder_output.transpose(1, 2), prediction_output=prediction_network_output
+        )
         return joint_output
 
     def greedy_decode(
