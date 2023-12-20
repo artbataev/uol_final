@@ -28,7 +28,6 @@ name: "FastConformer-Transducer-BPE"
 
 model:
   sample_rate: 16000
-  rnnt_reduction: 'mean_volume'
 
   model_defaults:
     enc_hidden: ${model.encoder.d_model}
@@ -158,13 +157,8 @@ model:
     max_symbols: 10
 
   loss:
-    loss_name: "default"
-
-    warprnnt_numba_kwargs:
-      # FastEmit regularization: https://arxiv.org/abs/2010.11148
-      # You may enable FastEmit to reduce the latency of the model for streaming
-      fastemit_lambda: 0.0  # Recommended values to be in range [1e-4, 1e-2], 0.001 is a good start.
-      clamp: -1.0  # if > 0, applies gradient clamping in range [-clamp, clamp] for the joint tensor only.
+    # loss_name: "default"
+    reduction: "mean_volume"
 
   optim:
     name: adamw

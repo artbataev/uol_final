@@ -1,13 +1,13 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pytorch_lightning as pl
 import torch
 from nemo.collections.asr.data import audio_to_text_dataset
 from nemo.collections.asr.models import ASRModel
 from nemo.collections.asr.modules import AudioToMelSpectrogramPreprocessor, ConformerEncoder, SpectrogramAugmentation
+from nemo.collections.asr.parts.k2.graph_transducer import GraphRnntLoss
 from nemo.collections.asr.parts.mixins import ASRBPEMixin
-from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
-from pytorch_lightning.utilities.types import STEP_OUTPUT
+from omegaconf import DictConfig
 from torchmetrics.text import WordErrorRate
 
 from min_rnnt.decoding import RNNTDecodingWrapper
@@ -23,24 +23,96 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             self.text_pad_id = self.tokenizer.pad_id
         else:
             self.text_pad_id = vocabulary_size
+        self.blank_index = vocabulary_size
 
         super().__init__(cfg=cfg, trainer=trainer)
         self.preprocessor = AudioToMelSpectrogramPreprocessor(**cfg.preprocessor)
         self.spec_aug = SpectrogramAugmentation(**cfg.spec_augment) if cfg.spec_augment else None
         self.encoder = ConformerEncoder(**cfg.encoder)
+
         prediction_network = MinPredictionNetwork(**cfg.prediction_network)
         joint = MinJoint(**cfg.joint)
-
         self.decoding = RNNTDecodingWrapper(
-            prediction_network=prediction_network, joint=joint, blank_index=vocabulary_size, max_symbols_per_step=10
+            prediction_network=prediction_network, joint=joint, blank_index=self.blank_index, max_symbols_per_step=10
         )
+        self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         self.wer = WordErrorRate()
+        self.val_wer: List[WordErrorRate] = []
 
-    def training_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
-        pass
+    def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
+        audio_features, audio_features_lengths = self.preprocessor(
+            input_signal=audio,
+            length=audio_lengths,
+        )
+        if self.spec_aug is not None and self.training:
+            audio_features = self.spec_aug(input_spec=audio_features, length=audio_features_lengths)
+        encoded_audio, encoded_audio_lengths = self.encoder(audio_signal=audio_features, length=audio_features_lengths)
+        return encoded_audio, encoded_audio_lengths
 
-    def validation_step(self, *args: Any, **kwargs: Any) -> Optional[STEP_OUTPUT]:
-        pass
+    def training_step(self, batch, batch_nb):
+        audio, audio_lengths, targets, targets_lengths = batch
+        encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
+        joint = self.decoding(
+            encoder_output=encoded_audio,
+            encoder_lengths=encoded_audio_lengths,
+            targets=targets,
+            target_lengths=targets_lengths,
+        )
+        loss_value = self.loss(acts=joint, act_lens=encoded_audio_lengths, labels=targets, label_lens=targets_lengths)
+        loss_value = loss_value.sum() / targets_lengths.sum()  # TODO: make parameter - reduction
+
+        assert self.trainer is not None, "Trainer should be set if training_step is called"
+        detailed_logs = dict()
+        detailed_logs["train_loss"] = loss_value
+        detailed_logs["learning_rate"] = self._optimizer.param_groups[0]["lr"]
+        detailed_logs["global_step"] = self.trainer.global_step
+        sample_id = self.trainer.global_step
+        if sample_id % self.trainer.log_every_n_steps == 0:
+            with torch.no_grad():
+                self.eval()
+                hyps = self.decoding.greedy_decode(encoder_output=encoded_audio, encoder_lengths=encoded_audio_lengths)
+                hyps_str = [self.tokenizer.ids_to_text(current_hyp) for current_hyp in hyps]
+                batch_size = targets.shape[0]
+                refs_str = [
+                    self.tokenizer.ids_to_text(targets[i, : targets_lengths[i]].tolist()) for i in range(batch_size)
+                ]
+                self.wer.update(preds=hyps_str, target=refs_str)
+                wer_value = self.wer.compute()
+                detailed_logs["training_wer"] = wer_value
+                self.wer.reset()
+                self.train()
+        self.log_dict(detailed_logs)
+        return {"loss": loss_value}
+
+    def validation_step(self, batch, batch_nb, dataloader_idx=0):
+        audio, audio_lengths, targets, targets_lengths = batch
+        encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
+        hyps = self.decoding.greedy_decode(encoder_output=encoded_audio, encoder_lengths=encoded_audio_lengths)
+        hyps_str = [self.tokenizer.ids_to_text(current_hyp) for current_hyp in hyps]
+        batch_size = targets.shape[0]
+        refs_str = [self.tokenizer.ids_to_text(targets[i, : targets_lengths[i]].tolist()) for i in range(batch_size)]
+        self.val_wer[dataloader_idx].update(preds=hyps_str, target=refs_str)
+
+    def on_validation_epoch_start(self):
+        num_val_loaders = len(self._validation_dl) if isinstance(self._validation_dl, list) else 1
+        self.val_wer = [WordErrorRate() for _ in range(num_val_loaders)]
+
+    def multi_validation_epoch_end(
+        self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0
+    ) -> Optional[Dict[str, Dict[str, torch.Tensor]]]:
+        return {"val_wer": self.val_wer[dataloader_idx].compute()}
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        raise NotImplementedError  # TODO
+
+    def setup_training_data(self, train_data_config: Union[DictConfig, Dict]):
+        train_data_config["shuffle"] = True
+        self._train_dl = self._setup_dataloader_from_config(config=train_data_config)
+        # TODO: fix tqdm bar?
+
+    def setup_validation_data(self, val_data_config: Union[DictConfig, Dict]):
+        val_data_config["shuffle"] = False
+        self._validation_dl = self._setup_dataloader_from_config(config=val_data_config)
 
     def _setup_dataloader_from_config(self, config: Optional[Dict]):
         dataset = audio_to_text_dataset.get_audio_to_text_bpe_dataset_from_config(
@@ -55,13 +127,13 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         if dataset is None:
             return None
 
-        shuffle = config['shuffle']
+        shuffle = config["shuffle"]
         if isinstance(dataset, torch.utils.data.IterableDataset):
             shuffle = False
 
-        if hasattr(dataset, 'collate_fn'):
+        if hasattr(dataset, "collate_fn"):
             collate_fn = dataset.collate_fn
-        elif hasattr(dataset.datasets[0], 'collate_fn'):
+        elif hasattr(dataset.datasets[0], "collate_fn"):
             # support datasets that are lists of entries
             collate_fn = dataset.datasets[0].collate_fn
         else:
@@ -70,10 +142,10 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
 
         return torch.utils.data.DataLoader(
             dataset=dataset,
-            batch_size=config['batch_size'],
+            batch_size=config["batch_size"],
             collate_fn=collate_fn,
-            drop_last=config.get('drop_last', False),
+            drop_last=config.get("drop_last", False),
             shuffle=shuffle,
-            num_workers=config.get('num_workers', 0),
-            pin_memory=config.get('pin_memory', False),
+            num_workers=config.get("num_workers", 0),
+            pin_memory=config.get("pin_memory", False),
         )
