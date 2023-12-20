@@ -53,10 +53,14 @@ class RNNTDecodingWrapper(nn.Module):
             all_blank_found = False
             symbols_added = 0
             blank_mask = time_i >= encoder_lengths
-            while not all_blank_found and (self.max_symbols is None or symbols_added < self.max_symbols):
+            while not all_blank_found and (
+                self.max_symbols_per_step is None or symbols_added < self.max_symbols_per_step
+            ):
                 blank_mask_prev = blank_mask.clone()
                 prev_state = state
-                prediction_output, state = self.prediction_network(input_prefix=last_label, state=state, add_sos=False)
+                prediction_output, state = self.prediction_network(
+                    input_prefix=last_label, input_lengths=torch.ones_like(last_label), state=state, add_sos=False
+                )
 
                 logp = (
                     self.joint(encoder_output=encoder_vec, prediction_output=prediction_output).squeeze(1).squeeze(1)

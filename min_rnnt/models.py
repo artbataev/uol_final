@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 import pytorch_lightning as pl
@@ -7,7 +8,7 @@ from nemo.collections.asr.models import ASRModel
 from nemo.collections.asr.modules import AudioToMelSpectrogramPreprocessor, ConformerEncoder, SpectrogramAugmentation
 from nemo.collections.asr.parts.k2.graph_transducer import GraphRnntLoss
 from nemo.collections.asr.parts.mixins import ASRBPEMixin
-from omegaconf import DictConfig
+from omegaconf import DictConfig, open_dict
 from torchmetrics.text import WordErrorRate
 
 from min_rnnt.decoding import RNNTDecodingWrapper
@@ -30,9 +31,11 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.spec_aug = SpectrogramAugmentation(**cfg.spec_augment) if cfg.spec_augment else None
         self.encoder = ConformerEncoder(**cfg.encoder)
 
-        self.cfg.prediction_network["vocab_size"] = vocabulary_size
+        with open_dict(self.cfg):
+            self.cfg.prediction_network["vocab_size"] = vocabulary_size
         prediction_network = MinPredictionNetwork(**self.cfg.prediction_network)
-        self.cfg.joint["output_size"] = vocabulary_size + 1  # vocab + blank
+        with open_dict(self.cfg):
+            self.cfg.joint["output_size"] = vocabulary_size + 1  # vocab + blank
         joint = MinJoint(**self.cfg.joint)
         self.decoding = RNNTDecodingWrapper(
             prediction_network=prediction_network,
@@ -45,13 +48,16 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.val_wer: List[WordErrorRate] = []
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
+        logging.warning(f"audio: {audio.shape}, expecte BxT")
         audio_features, audio_features_lengths = self.preprocessor(
             input_signal=audio,
             length=audio_lengths,
         )
+        logging.warning(f"audio_features: {audio_features.shape}, expected BxDxT")
         if self.spec_aug is not None and self.training:
             audio_features = self.spec_aug(input_spec=audio_features, length=audio_features_lengths)
         encoded_audio, encoded_audio_lengths = self.encoder(audio_signal=audio_features, length=audio_features_lengths)
+        logging.warning(f"encoded audio {encoded_audio.shape}, expected BxDxT")
         return encoded_audio, encoded_audio_lengths
 
     def training_step(self, batch, batch_nb):

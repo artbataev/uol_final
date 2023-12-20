@@ -37,7 +37,7 @@ class MinPredictionNetwork(nn.Module):
             hidden_size=hidden_dim,
             num_layers=num_layers,
             dropout=dropout,
-            proj_size=hidden_dim,
+            proj_size=0,
             forget_gate_bias=1.0,
         )
 
