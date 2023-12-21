@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import pytorch_lightning as pl
 import torch
+import torch.nn as nn
 from nemo.collections.asr.data import audio_to_text_dataset
 from nemo.collections.asr.models import ASRModel
 from nemo.collections.asr.modules import AudioToMelSpectrogramPreprocessor, ConformerEncoder, SpectrogramAugmentation
@@ -46,7 +47,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         )
         self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         self.wer = WordErrorRate()
-        self.val_wer: List[WordErrorRate] = []
+
+        self.val_wer: List[WordErrorRate]
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
         # logging.warning(f"audio: {audio.shape}, expected BxT")
@@ -108,8 +110,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.val_wer[dataloader_idx].update(preds=hyps_str, target=refs_str)
 
     def on_validation_start(self):
-        num_val_loaders = len(self._validation_dl) if isinstance(self._validation_dl, list) else 1
-        self.val_wer = [WordErrorRate() for _ in range(num_val_loaders)]
+        for submodule in self.val_wer:
+            submodule.reset()
 
     def multi_validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0):
         return {"log": {"val_wer": self.val_wer[dataloader_idx].compute()}}
@@ -132,6 +134,11 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                     self.trainer.limit_train_batches
                     * math.ceil((len(self._train_dl.dataset) / self.world_size) / train_data_config["batch_size"])
                 )
+
+    def setup_multiple_validation_data(self, val_data_config: Union[DictConfig, Dict]):
+        super().setup_multiple_validation_data(val_data_config=val_data_config)
+        num_val_loaders = len(self._validation_dl) if isinstance(self._validation_dl, list) else 1
+        self.val_wer = nn.ModuleList([WordErrorRate(dist_sync_on_step=True) for _ in range(num_val_loaders)])
 
     def setup_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         val_data_config["shuffle"] = False
