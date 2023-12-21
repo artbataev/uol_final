@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Any, Dict, List, Optional, Union
 
 import pytorch_lightning as pl
@@ -121,6 +122,16 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self._update_dataset_config(dataset_name="train", config=train_data_config)
         self._train_dl = self._setup_dataloader_from_config(config=train_data_config)
         # TODO: fix tqdm bar?
+        if (
+            self._train_dl is not None
+            and hasattr(self._train_dl, "dataset")
+            and isinstance(self._train_dl.dataset, torch.utils.data.IterableDataset)
+        ):
+            if self.trainer is not None and isinstance(self.trainer.limit_train_batches, float):
+                self.trainer.limit_train_batches = int(
+                    self.trainer.limit_train_batches
+                    * math.ceil((len(self._train_dl.dataset) / self.world_size) / train_data_config["batch_size"])
+                )
 
     def setup_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         val_data_config["shuffle"] = False
