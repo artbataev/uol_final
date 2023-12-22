@@ -46,7 +46,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             max_symbols_per_step=self.cfg.decoding.get("max_symbols", 10),
         )
         self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
-        self.wer = WordErrorRate()
+        self.wer = WordErrorRate(dist_sync_on_step=True)
 
         self.val_wer: List[WordErrorRate]
 
