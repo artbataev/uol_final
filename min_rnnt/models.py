@@ -50,7 +50,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         elif self.cfg.loss.loss_name == "star_rnnt":
             self.loss = GraphStarTransducerLoss(
-                blank=self.blank_index, eps_weight=self.cfg.loss.loss_name.get("eps_weight", 0.0), double_scores=True
+                blank=self.blank_index, eps_weight=self.cfg.loss.get("eps_weight", 0.0), double_scores=True
             )
         else:
             raise NotImplementedError(f"loss {self.cfg.loss.loss_name} not supported")
