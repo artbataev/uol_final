@@ -12,7 +12,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         self,
         blank: int,
         eps_weight: float = 0.0,
-        use_grid_implementation=True,
+        use_grid_implementation=False,
         connect_composed=False,
         double_scores=False,
         cast_to_float32=False,
