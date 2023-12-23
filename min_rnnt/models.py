@@ -14,6 +14,7 @@ from omegaconf import DictConfig, open_dict
 from torchmetrics.text import WordErrorRate
 
 from min_rnnt.decoding import RNNTDecodingWrapper
+from min_rnnt.losses import GraphStarTransducerLoss
 from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 
@@ -45,7 +46,14 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             blank_index=self.blank_index,
             max_symbols_per_step=self.cfg.decoding.get("max_symbols", 10),
         )
-        self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
+        if self.cfg.loss.loss_name == "rnnt":
+            self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
+        elif self.cfg.loss.loss_name == "star_rnnt":
+            self.loss = GraphStarTransducerLoss(
+                blank=self.blank_index, eps_weight=self.cfg.loss.loss_name.get("eps_weight", 0.0), double_scores=True
+            )
+        else:
+            raise NotImplementedError(f"loss {self.cfg.loss.loss_name} not supported")
         self.wer = WordErrorRate(dist_sync_on_step=True)
 
         self.val_wer: List[WordErrorRate]

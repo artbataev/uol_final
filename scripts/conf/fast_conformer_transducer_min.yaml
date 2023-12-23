@@ -157,7 +157,7 @@ model:
     max_symbols: 10
 
   loss:
-    # loss_name: "default"
+    loss_name: "rnnt"
     reduction: "mean_volume"
 
   optim:
