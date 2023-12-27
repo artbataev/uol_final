@@ -48,13 +48,13 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         )
         if self.cfg.loss.loss_name == "rnnt":
             self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
-        elif self.cfg.loss.loss_name == "star_rnnt":
+        elif self.cfg.loss.loss_name == "star_t":
             self.loss = GraphStarTransducerLoss(
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
                 double_scores=True,
             )
-        elif self.cfg.loss.loss_name == "target_robust_rnnt":
+        elif self.cfg.loss.loss_name == "trt":
             self.loss = GraphTargetRobustTransducerLoss(
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
