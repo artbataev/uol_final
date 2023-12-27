@@ -14,7 +14,7 @@ from omegaconf import DictConfig, open_dict
 from torchmetrics.text import WordErrorRate
 
 from min_rnnt.decoding import RNNTDecodingWrapper
-from min_rnnt.losses import GraphStarTransducerLoss
+from min_rnnt.losses import GraphStarTransducerLoss, GraphTargetRobustTransducerLoss
 from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 
@@ -50,7 +50,16 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         elif self.cfg.loss.loss_name == "star_rnnt":
             self.loss = GraphStarTransducerLoss(
-                blank=self.blank_index, eps_weight=self.cfg.loss.get("eps_weight", 0.0), double_scores=True
+                blank=self.blank_index,
+                skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
+                double_scores=True,
+            )
+        elif self.cfg.loss.loss_name == "target_robust_rnnt":
+            self.loss = GraphTargetRobustTransducerLoss(
+                blank=self.blank_index,
+                skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
+                skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
+                double_scores=True,
             )
         else:
             raise NotImplementedError(f"loss {self.cfg.loss.loss_name} not supported")
