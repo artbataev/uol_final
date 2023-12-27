@@ -325,7 +325,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         # blank-arcs: forward
         fsa_temporal_arcs[blank_id : -1 : vocab_size + 2, 1] = sequence_states + 1  # blanks
         fsa_temporal_arcs[skip_frame_id : -2 : vocab_size + 2, 1] = (sequence_states + 1)[:-1]  # [:-1]  # blanks
-        fsa_temporal_arcs[-3, 2] = skip_token_id
+        fsa_temporal_arcs[-2, 2] = skip_token_id
 
         # transition to last final state
         fsa_temporal_arcs[-1, :3] = torch.tensor((num_frames, num_frames + 1, -1), dtype=torch.int32, device=device)
