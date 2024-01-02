@@ -121,6 +121,12 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.log_dict(detailed_logs)
         return {"loss": loss_value}
 
+    def on_train_epoch_start(self) -> None:
+        if self.cfg.loss.loss_name in {"bypass_t", "trt"}:
+            if isinstance(self.trainer.current_epoch, int) and self.trainer.current_epoch > 1:
+                self.loss.skip_token_penalty *= 0.975
+            self.log("skip_token_penalty", self.loss.skip_token_penalty)
+
     def validation_step(self, batch, batch_nb, dataloader_idx=0):
         audio, audio_lengths, targets, targets_lengths = batch
         encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
