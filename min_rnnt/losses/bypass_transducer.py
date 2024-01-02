@@ -40,8 +40,6 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
             +-----------+  1:1:0   +-----------+  2:2:1   +-----------+  -1:-1:-1  #===#
             |     0     | -------> |     1     | -------> |     2     | ---------> H 3 H
             +-----------+ -------> +-----------+          +-----------+            #===#
-              ^ 3:3:0 |              ^ 3:3:1 |              ^ 3:3:2 |
-              +-------+              +-------+              +-------+
 
         Args:
             units_tensor: 1d tensor with text units
@@ -53,12 +51,12 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         """
 
         blank_id = self.blank
-        eps_id = vocab_size
+        skip_token_id = vocab_size
         device = units_tensor.device
         text_len = units_tensor.shape[0]
 
         # arcs: scr, dest, label, score
-        arcs = torch.zeros(((text_len + 1) * 3, 4), dtype=torch.int32, device=device)
+        arcs = torch.zeros(((text_len + 1) * 3 - 1, 4), dtype=torch.int32, device=device)
         text_indices = torch.arange(0, text_len + 1, dtype=torch.int32, device=device)
         # blank labels
         arcs[0:-1:3, 0] = text_indices  # from state
@@ -66,19 +64,20 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         arcs[0:-1:3, 2] = blank_id
 
         # eps labels
-        arcs[1:-1:3, 0] = text_indices  # from state
-        arcs[1:-1:3, 1] = text_indices  # to state
-        arcs[1:-1:3, 2] = eps_id
+        arcs[1:-1:3, 0] = text_indices[:-1]  # from state
+        arcs[1:-1:3, 1] = text_indices[:-1] + 1  # to state
+        arcs[1:-1:3, 2] = skip_token_id
 
         # text labels
-        arcs[2::3, 0] = text_indices  # from state
-        arcs[2::3, 1] = text_indices + 1  # to state
+        arcs[2::3, 0] = text_indices[:-1]  # from state
+        arcs[2::3, 1] = text_indices[:-1] + 1  # to state
         arcs[2:-1:3, 2] = units_tensor  # labels: text
-        arcs[-1, 2] = -1  # last transition to final state, ilabel=-1 (special for k2)
+        # last transition to final state, ilabel=-1 (special for k2)
+        arcs[-1] = torch.tensor([text_len, text_len + 1, -1, 0], dtype=arcs.dtype, device=device)
         olabels = arcs[:, 2].detach().clone()  # same as ilabels
 
         fsa_text = k2.Fsa(arcs, olabels)
-        fsa_text.unit_positions = text_indices.expand(3, -1).transpose(0, 1).flatten()
+        fsa_text.unit_positions = text_indices.expand(3, -1).transpose(0, 1).flatten()[:-1]
         fsa_text.unit_positions[-1] = -1
         return fsa_text
 
@@ -101,14 +100,14 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         """
         blank_id = self.blank
 
-        fsa_temporal_arcs = torch.zeros((num_frames * (vocab_size + 1), 4), dtype=torch.int32, device=device)
+        fsa_temporal_arcs = torch.zeros((num_frames * (vocab_size + 1) + 1, 4), dtype=torch.int32, device=device)
         sequence_states = torch.arange(0, num_frames, dtype=torch.int32, device=device)
         # for every state - vocab_size arcs, [0, 1, ..., vocab_size-1, 0, 1, ..., vocab_size-1, ...]
         start_states = sequence_states.expand(vocab_size + 1, num_frames).transpose(0, 1).flatten()
         # first: make all arcs - self-loops
-        fsa_temporal_arcs[:, 0] = start_states  # from
-        fsa_temporal_arcs[:, 1] = start_states  # to
-        fsa_temporal_arcs[:, 2] = (
+        fsa_temporal_arcs[:-1, 0] = start_states  # from
+        fsa_temporal_arcs[:-1, 1] = start_states  # to
+        fsa_temporal_arcs[:-1, 2] = (
             torch.arange(0, vocab_size + 1, dtype=torch.int32, device=device)
             .expand(num_frames, vocab_size + 1)
             .flatten()
@@ -116,7 +115,6 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
 
         # blank-arcs: forward
         fsa_temporal_arcs[blank_id : -1 : vocab_size + 1, 1] = sequence_states + 1  # blanks
-        fsa_temporal_arcs[vocab_size : -1 : vocab_size + 1, 1] = (sequence_states + 1)[:-1]  # [:-1]  # blanks
 
         # transition to last final state
         fsa_temporal_arcs[-1, :3] = torch.tensor((num_frames, num_frames + 1, -1), dtype=torch.int32, device=device)
