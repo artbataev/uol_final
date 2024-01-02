@@ -54,6 +54,12 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
                 double_scores=True,
             )
+        elif self.cfg.loss.loss_name == "bypass_t":
+            self.loss = GraphTargetRobustTransducerLoss(
+                blank=self.blank_index,
+                skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
+                double_scores=True,
+            )
         elif self.cfg.loss.loss_name == "trt":
             self.loss = GraphTargetRobustTransducerLoss(
                 blank=self.blank_index,
