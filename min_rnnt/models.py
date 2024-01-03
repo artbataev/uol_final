@@ -123,8 +123,9 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
 
     def on_train_epoch_start(self) -> None:
         if self.cfg.loss.loss_name in {"bypass_t", "trt"}:
-            if isinstance(self.trainer.current_epoch, int) and self.trainer.current_epoch > 1:
-                self.loss.skip_token_penalty *= 0.975
+            initial_skip_token_penalty = self.cfg.loss.get("skip_token_penalty", 0.0)
+            if self.trainer.current_epoch > 3:
+                self.loss.skip_token_penalty = initial_skip_token_penalty * (0.975 ** (self.trainer.current_epoch - 3))
             self.log("skip_token_penalty", self.loss.skip_token_penalty)
 
     def validation_step(self, batch, batch_nb, dataloader_idx=0):
