@@ -46,6 +46,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             blank_index=self.blank_index,
             max_symbols_per_step=self.cfg.decoding.get("max_symbols", 10),
         )
+        self.skip_token_decay = self.cfg.loss.get("skip_token_decay", 1.0)
+        self.skip_token_decay_min_epoch = 3
         if self.cfg.loss.loss_name == "rnnt":
             self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         elif self.cfg.loss.loss_name == "star_t":
@@ -124,8 +126,10 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
     def on_train_epoch_start(self) -> None:
         if self.cfg.loss.loss_name in {"bypass_t", "trt"}:
             initial_skip_token_penalty = self.cfg.loss.get("skip_token_penalty", 0.0)
-            if self.trainer.current_epoch > 3:
-                self.loss.skip_token_penalty = initial_skip_token_penalty * (0.975 ** (self.trainer.current_epoch - 3))
+            if self.trainer.current_epoch > self.skip_token_decay_min_epoch:
+                self.loss.skip_token_penalty = initial_skip_token_penalty * (
+                    self.skip_token_decay ** (self.trainer.current_epoch - self.skip_token_decay_min_epoch)
+                )
             self.log("skip_token_penalty", self.loss.skip_token_penalty)
 
     def validation_step(self, batch, batch_nb, dataloader_idx=0):
