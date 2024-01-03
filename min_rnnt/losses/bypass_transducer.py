@@ -163,7 +163,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
             scores = log_probs.flatten().index_select(-1, indices)
             # fix weights for the arcs to the last state + eps-transitions
             scores[target_fsas_vec.labels == -1] = 0
-            scores[target_fsas_vec.labels >= vocab_size] = self.skip_frame_penalty  # eps
+            scores[target_fsas_vec.labels >= vocab_size] = self.skip_token_penalty
 
             target_fsas_vec.scores = scores
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
