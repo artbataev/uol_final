@@ -7,6 +7,14 @@ from nemo.collections.asr.parts.k2.graph_transducer import GraphRnntLoss, force_
 
 
 class GraphStarTransducerLoss(GraphRnntLoss):
+    """
+    This loss is a modified version of Graph-Transducer, see
+    https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/parts/k2/graph_transducer.py
+    We add skip_token arcs parallel to blank arcs to allow the loss to take into account
+    alignments, where some time frames are skipped: useful for training RNN-T with partial transcripts
+    (deletions in ground truth texts)
+    """
+
     def __init__(
         self,
         blank: int,
@@ -21,7 +29,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
 
         Args:
             blank: blank label index
-            skip_frame_penalty: weight of epsilon transitions, 0 means no penalty (default)
+            skip_frame_penalty: weight of skip frame transitions, 0 means no penalty (default)
             use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
             connect_composed: Connect graph after composing unit and temporal schemas
                 (only for Compose-Transducer). `connect` operation is slow, it is useful for visualization,
@@ -40,106 +48,69 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         self.skip_frame_penalty = skip_frame_penalty
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
-        """
-        Get unit schema (target text) graph for Star-Transducer loss (Compose-Transducer).
-        Forward arcs represent text labels.
-
-        Example graph: text [1, 2], blank=0. Eps id: 3.
-
-        graph::
-
-                0:0:0                  0:0:1                  0:0:2
-              +-------+              +-------+              +-------+
-              v       |              v       |              v       |
-            +-----------+  1:1:0   +-----------+  2:2:1   +-----------+  -1:-1:-1  #===#
-            |     0     | -------> |     1     | -------> |     2     | ---------> H 3 H
-            +-----------+          +-----------+          +-----------+            #===#
-              ^ 3:3:0 |              ^ 3:3:1 |              ^ 3:3:2 |
-              +-------+              +-------+              +-------+
-
-        Args:
-            units_tensor: 1d tensor with text units
-            vocab_size: number of total labels (vocab size including blank)
-
-        Returns:
-            unit schema graph (k2.Fsa).
-            Labels: <unit>:<unit>:<unit_position> (k2.Fsa: labels, aux_labels, unit_positions)
-        """
-
+        """construct WFST from text units"""
         blank_id = self.blank
-        eps_id = vocab_size
+        skip_frame_id = vocab_size
         device = units_tensor.device
         text_len = units_tensor.shape[0]
 
         # arcs: scr, dest, label, score
-        arcs = torch.zeros(((text_len + 1) * 3, 4), dtype=torch.int32, device=device)
+        units_arcs = torch.zeros(((text_len + 1) * 3, 4), dtype=torch.int32, device=device)
         text_indices = torch.arange(0, text_len + 1, dtype=torch.int32, device=device)
-        # blank labels
-        arcs[0:-1:3, 0] = text_indices  # from state
-        arcs[0:-1:3, 1] = text_indices  # to state
-        arcs[0:-1:3, 2] = blank_id
+        # fill blank labels: self-loops, each 3rd element
+        units_arcs[0:-1:3, 0] = text_indices  # from state
+        units_arcs[0:-1:3, 1] = text_indices  # to state
+        units_arcs[0:-1:3, 2] = blank_id
 
-        # eps labels
-        arcs[1:-1:3, 0] = text_indices  # from state
-        arcs[1:-1:3, 1] = text_indices  # to state
-        arcs[1:-1:3, 2] = eps_id
+        # skip_frame labels: each 3rd element starting from 1, self-loops
+        units_arcs[1:-1:3, 0] = text_indices  # from state
+        units_arcs[1:-1:3, 1] = text_indices  # to state
+        units_arcs[1:-1:3, 2] = skip_frame_id
 
         # text labels
-        arcs[2::3, 0] = text_indices  # from state
-        arcs[2::3, 1] = text_indices + 1  # to state
-        arcs[2:-1:3, 2] = units_tensor  # labels: text
-        arcs[-1, 2] = -1  # last transition to final state, ilabel=-1 (special for k2)
-        olabels = arcs[:, 2].detach().clone()  # same as ilabels
+        units_arcs[2::3, 0] = text_indices  # from state
+        units_arcs[2::3, 1] = text_indices + 1  # to state
+        units_arcs[2:-1:3, 2] = units_tensor  # labels: text
+        units_arcs[-1, 2] = -1  # last transition to final state, ilabel=-1 (special for k2)
+        olabels = units_arcs[:, 2].detach().clone()  # same as ilabels, text units
 
-        fsa_text = k2.Fsa(arcs, olabels)
-        fsa_text.unit_positions = text_indices.expand(3, -1).transpose(0, 1).flatten()
-        fsa_text.unit_positions[-1] = -1
-        return fsa_text
+        fsa_units = k2.Fsa(units_arcs, olabels)
+        fsa_units.unit_positions = text_indices.expand(3, -1).transpose(0, 1).flatten()
+        fsa_units.unit_positions[-1] = -1
+        return fsa_units
 
     def get_temporal_schema(self, num_frames: int, vocab_size: int, device: torch.device) -> "k2.Fsa":
-        """
-        Get temporal schema graph for Star-Transducer loss (Compose-Transducer).
-
-        Example graph: blank=0, num_frames=3, vocab_size=3, last_blank_mode="force_final".
-        Labels: <unit>:<frame_index>. <unit> is a unit from vocab + special eps ids `vocab_size`.
-
-
-        Args:
-            num_frames: length of the sequence (in frames)
-            vocab_size: number of labels (including blank)
-            device: device for tensor to construct
-
-        Returns:
-            temporal schema graph (k2.Fsa).
-            Labels: <unit>:<frame_index>. <unit> is a unit from vocab + special units (e.g., additional eps).
-        """
+        """Construct WFST for temporal schema"""
+        # input labels: all text units
+        # output labels: time indices
         blank_id = self.blank
 
-        fsa_temporal_arcs = torch.zeros((num_frames * (vocab_size + 1), 4), dtype=torch.int32, device=device)
-        sequence_states = torch.arange(0, num_frames, dtype=torch.int32, device=device)
+        temporal_arcs = torch.zeros((num_frames * (vocab_size + 1), 4), dtype=torch.int32, device=device)
+        time_ids = torch.arange(0, num_frames, dtype=torch.int32, device=device)
         # for every state - vocab_size arcs, [0, 1, ..., vocab_size-1, 0, 1, ..., vocab_size-1, ...]
-        start_states = sequence_states.expand(vocab_size + 1, num_frames).transpose(0, 1).flatten()
+        start_states = time_ids.expand(vocab_size + 1, num_frames).transpose(0, 1).flatten()
         # first: make all arcs - self-loops
-        fsa_temporal_arcs[:, 0] = start_states  # from
-        fsa_temporal_arcs[:, 1] = start_states  # to
-        fsa_temporal_arcs[:, 2] = (
+        temporal_arcs[:, 0] = start_states  # from
+        temporal_arcs[:, 1] = start_states  # to
+        temporal_arcs[:, 2] = (
             torch.arange(0, vocab_size + 1, dtype=torch.int32, device=device)
             .expand(num_frames, vocab_size + 1)
             .flatten()
         )
 
         # blank-arcs: forward
-        fsa_temporal_arcs[blank_id : -1 : vocab_size + 1, 1] = sequence_states + 1  # blanks
-        fsa_temporal_arcs[vocab_size : -1 : vocab_size + 1, 1] = (sequence_states + 1)[:-1]  # [:-1]  # blanks
+        temporal_arcs[blank_id : -1 : vocab_size + 1, 1] = time_ids + 1
+        # skip_frame arcs: forward (parallel to blank)
+        temporal_arcs[vocab_size : -1 : vocab_size + 1, 1] = (time_ids + 1)[:-1]
 
-        # transition to last final state
-        fsa_temporal_arcs[-1, :3] = torch.tensor((num_frames, num_frames + 1, -1), dtype=torch.int32, device=device)
+        # transition to the last final state
+        temporal_arcs[-1, :3] = torch.tensor((num_frames, num_frames + 1, -1), dtype=torch.int32, device=device)
 
-        # output symbols: position in the sequence, same as start states for arcs
-        olabels = fsa_temporal_arcs[:, 0].detach().clone()
-        olabels[-1] = -1  # last arc to final state
+        # output symbols: position in the sequence, same as start states for all arcs
+        olabels = temporal_arcs[:, 0].detach().clone()
+        olabels[-1] = -1  # special: last arc to the final state
 
-        fsa_temporal = k2.Fsa(fsa_temporal_arcs, olabels)
+        fsa_temporal = k2.Fsa(temporal_arcs, olabels)
         fsa_temporal = k2.arc_sort(fsa_temporal)  # need for compose
         return fsa_temporal
 
@@ -155,10 +126,10 @@ class GraphStarTransducerLoss(GraphRnntLoss):
     ):
         """
         Forward method is similar to RNN-T Graph-Transducer forward method,
-        but we need to assign eps weight to eps-transitions.
+        see https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/parts/k2/graph_transducer.py
+        We customize skip_frames penalty (hyperparameter of the loss)
         """
-        # argument names are consistent with NeMo, see RNNTLoss.forward:
-        # self._loss(acts=log_probs, labels=targets, act_lens=input_lengths, label_lens=target_lengths)
+        # argument names are consistent with NeMo, see RNNTLoss.forward
         logits, targets, logits_lengths, target_lengths = acts, labels, act_lens, label_lens
 
         # logits: B x Time x Text+1 x C
@@ -167,20 +138,25 @@ class GraphStarTransducerLoss(GraphRnntLoss):
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
         with cast_context:
+            # activation: log softmax
             log_probs = F.log_softmax(logits, dim=-1)
+
             with torch.no_grad():
                 indices = self.get_logits_indices(target_fsas_vec, logits.shape)
                 # transition to the last state + eps-transitions
                 # use 0 index (for valid index_select) and manually assign score after index_select for this case
                 indices[target_fsas_vec.labels == -1] = 0
-                indices[target_fsas_vec.labels >= vocab_size] = 0  # eps
+                indices[target_fsas_vec.labels >= vocab_size] = 0  # special transitions
 
             # NB: do not assign scores -> modify, k2 will not update all scores correctly (modify -> assign)
             scores = log_probs.flatten().index_select(-1, indices)
-            # fix weights for the arcs to the last state + eps-transitions
+            # fix weights for the arcs to the last state
             scores[target_fsas_vec.labels == -1] = 0
+            # assign skip_frame penalty to skip_frame arcs
             scores[target_fsas_vec.labels >= vocab_size] = self.skip_frame_penalty  # eps
 
             target_fsas_vec.scores = scores
+
+            # compute loss: full-sum
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
             return scores
