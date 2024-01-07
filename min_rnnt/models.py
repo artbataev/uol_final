@@ -19,8 +19,16 @@ from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 
 class MinRNNTModel(ASRModel, ASRBPEMixin):
+    """
+    Minimal RNN-T model with custom MinJoint and MinPredictionNetwork modules, reuses Encoder and data loader from NeMo,
+    customized from
+    https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/models/rnnt_bpe_models.py
+    """
+
     def __init__(self, cfg: DictConfig, trainer: pl.Trainer = None):
+        # setup SentencePiece tokenizer
         self._setup_tokenizer(cfg.tokenizer)
+
         vocabulary = self.tokenizer.tokenizer.get_vocab()
         vocabulary_size = len(vocabulary)
         if hasattr(self.tokenizer, "pad_id") and self.tokenizer.pad_id > 0:
@@ -30,10 +38,14 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.blank_index = vocabulary_size
 
         super().__init__(cfg=cfg, trainer=trainer)
+
         self.preprocessor = AudioToMelSpectrogramPreprocessor(**cfg.preprocessor)
         self.spec_aug = SpectrogramAugmentation(**cfg.spec_augment) if cfg.spec_augment else None
+
+        # Encoder part
         self.encoder = ConformerEncoder(**cfg.encoder)
 
+        # Precition and Joint networks
         with open_dict(self.cfg):
             self.cfg.prediction_network["vocab_size"] = vocabulary_size
         prediction_network = MinPredictionNetwork(**self.cfg.prediction_network)
@@ -46,6 +58,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             blank_index=self.blank_index,
             max_symbols_per_step=self.cfg.decoding.get("max_symbols", 10),
         )
+
+        # loss parameters
         self.skip_token_decay = self.cfg.loss.get("skip_token_decay", 1.0)
         self.skip_token_decay_min_epoch = 3
         if self.cfg.loss.loss_name == "rnnt":

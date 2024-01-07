@@ -8,6 +8,13 @@ from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 
 class RNNTDecodingWrapper(nn.Module):
+    """
+    Decoding Wrapper with Greedy Decoding implementation.
+    Same algorithm as used in NeMo, but simplified for easiness of customization
+    Original algorithm:
+    https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py#L478
+    """
+
     def __init__(
         self,
         prediction_network: MinPredictionNetwork,
@@ -43,63 +50,66 @@ class RNNTDecodingWrapper(nn.Module):
     ) -> List[List[int]]:
         encoder_output = encoder_output.permute(2, 0, 1)  # T, B, D
         max_time, batch_size, _ = encoder_output.shape
-        # logging.warning(f"B {batch_size}, T {max_time}")
         hyps = [[] for _ in range(batch_size)]
 
         state = None
         device = encoder_output.device
+        # we use <blank> symbols as <SOS>
         last_label = torch.full([batch_size], fill_value=self.blank_index, dtype=torch.long, device=device)
 
+        # loop over time frames
         for time_i in range(max_time):
-            encoder_vec = encoder_output[time_i]
+            encoder_vec = encoder_output[time_i]  # get current encoder vector
 
             all_blank_found = False
             symbols_added = 0
-            blank_mask = time_i >= encoder_lengths
+            blank_mask = time_i >= encoder_lengths  # use labels only if we are not out-of-sequence
             while not all_blank_found and (
                 self.max_symbols_per_step is None or symbols_added < self.max_symbols_per_step
             ):
-                # blank_mask_prev = blank_mask.clone()
-                prev_state = state
+                prev_state = state  # cache previous state
+                # compute prediction network with updated labels
                 prediction_output, state = self.prediction_network(
                     input_prefix=last_label.unsqueeze(1),
                     input_lengths=torch.ones_like(last_label),
                     state=state,
                     add_sos=False,
                 )
-                # logging.warning(f"prediction_output {prediction_output.shape}")
-                # logging.warning(f"{state[0].shape}")
 
+                # compute Joint network
                 joint_output = (
                     self.joint(encoder_output=encoder_vec.unsqueeze(1), prediction_output=prediction_output)
                     .squeeze(1)
                     .squeeze(1)
                 )
-                # logging.warning(f"Joint: {joint_output.shape}")
+                # greedy: get labels with maximum probability (maximum logit is enough)
                 labels = joint_output.argmax(dim=1)
 
+                # check if labels are blank
                 blank_mask.bitwise_or_(labels == self.blank_index)
-                # blank_mask_prev.bitwise_or_(blank_mask)
 
                 if blank_mask.all():
-                    all_blank_found = True
+                    all_blank_found = True  # transition to the next encoder frames, end loop
                 else:
                     non_blank_indices = (blank_mask == False).nonzero(as_tuple=False).squeeze(1)
+                    # store found non-blank symbols
                     for i in non_blank_indices.tolist():
                         hyps[i].append(labels[i].item())
                     symbols_added += 1
 
-                # logging.warning(f"Updating state {[sub_state.shape for sub_state in state]}")
                 if blank_mask.any():
-                    blank_indices = (blank_mask == True).nonzero(as_tuple=False).squeeze(1)
+                    blank_indices = blank_mask.nonzero(as_tuple=False).squeeze(1)
                     if prev_state is not None:
-                        if isinstance(state, tuple):
+                        if isinstance(state, tuple):  # Lstm
+                            # restore state for found blank labels
                             for i, sub_state in enumerate(state):
                                 sub_state[:, blank_indices] = prev_state[i][:, blank_indices]
                         else:
                             raise NotImplementedError
                     else:
+                        # start of the decoding,
                         if isinstance(state, tuple):
+                            # restore 0 initial state for found blank labels
                             for i, sub_state in enumerate(state):
                                 sub_state[:, blank_indices] = 0.0
                         else:
@@ -107,5 +117,4 @@ class RNNTDecodingWrapper(nn.Module):
 
                     labels[blank_indices] = last_label[blank_indices]
                 last_label = labels.clone()
-
         return hyps
