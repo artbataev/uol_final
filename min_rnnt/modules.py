@@ -2,6 +2,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+from nemo.collections.common.parts.rnn import LSTMDropout
 
 
 class LSTMWithDropout(nn.Module):
@@ -74,8 +75,17 @@ class MinPredictionNetwork(nn.Module):
         super().__init__()
         self.blank_index = vocab_size
         self.embedding = nn.Embedding(vocab_size + 1, embedding_dim=hidden_dim, padding_idx=self.blank_index)
-        self.rnn = LSTMWithDropout(
-            input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, proj_size=0
+        # TODO: Fix LSTM with Dropout
+        # self.rnn = LSTMWithDropout(
+        #     input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, proj_size=0
+        # )
+        self.rnn = LSTMDropout(
+            input_size=hidden_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            dropout=dropout,
+            proj_size=0,
+            forget_gate_bias=1.0,
         )
 
     def forward(self, input_prefix: torch.Tensor, input_lengths: torch.Tensor, state=None, add_sos: bool = True):
