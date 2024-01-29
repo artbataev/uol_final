@@ -151,20 +151,38 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
         with cast_context:
+            # activation: log softmax
             log_probs = F.log_softmax(logits, dim=-1)
             with torch.no_grad():
-                indices = self.get_logits_indices(target_fsas_vec, logits.shape)
-                # transition to the last state + eps-transitions
-                # use 0 index (for valid index_select) and manually assign score after index_select for this case
-                indices[target_fsas_vec.labels == -1] = 0
-                indices[target_fsas_vec.labels >= vocab_size] = 0  # eps
+                last_transition_mask = target_fsas_vec.labels == -1
+                skip_token_transition_mask = target_fsas_vec.labels == vocab_size
+
+                batch_indices = last_transition_mask.cumsum(dim=-1) - last_transition_mask.to(torch.long)
+                time_indices = target_fsas_vec.aux_labels.clone().to(torch.int64)
+                unit_indices = target_fsas_vec.unit_positions.clone().to(torch.int64)
+                text_units = target_fsas_vec.labels.clone().to(torch.int64)
+
+                # eps transitions
+                batch_indices.masked_fill_(last_transition_mask, 0)
+                time_indices.masked_fill_(last_transition_mask, 0)
+                unit_indices.masked_fill_(last_transition_mask, 0)
+                text_units.masked_fill_(last_transition_mask, 0)
+
+                # skip frames transitions
+                batch_indices.masked_fill_(skip_token_transition_mask, 0)
+                time_indices.masked_fill_(skip_token_transition_mask, 0)
+                unit_indices.masked_fill_(skip_token_transition_mask, 0)
+                text_units.masked_fill_(skip_token_transition_mask, 0)
 
             # NB: do not assign scores -> modify, k2 will not update all scores correctly (modify -> assign)
-            scores = log_probs.flatten().index_select(-1, indices)
-            # fix weights for the arcs to the last state + eps-transitions
-            scores[target_fsas_vec.labels == -1] = 0
-            scores[target_fsas_vec.labels >= vocab_size] = self.skip_token_penalty
+            scores = log_probs[batch_indices, time_indices, unit_indices, text_units]
+            # fix weights for the arcs to the last state
+            scores[last_transition_mask] = 0
+            # assign skip_frame penalty to skip_frame arcs
+            scores[skip_token_transition_mask] = self.skip_token_penalty
 
             target_fsas_vec.scores = scores
+
+            # compute loss: full-sum
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
             return scores
