@@ -11,6 +11,8 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         self,
         blank: int,
         skip_token_penalty: float = 0.0,
+        skip_token_mode: str = "mean",
+        return_graph: bool = False,
         use_grid_implementation=False,  # TODO: grid impl
         connect_composed=False,
         double_scores=False,
@@ -23,7 +25,9 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
             double_scores=double_scores,
             cast_to_float32=cast_to_float32,
         )
+        self.return_graph = return_graph
         self.skip_token_penalty = skip_token_penalty
+        self.skip_token_mode = skip_token_mode
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
         """
@@ -147,6 +151,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
 
         # logits: B x Time x Text+1 x C
         vocab_size = logits.shape[-1]
+        batch_size = logits.shape[0]
         target_fsas_vec = self.get_graphs_batched(logits_lengths, targets, target_lengths, vocab_size)
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
@@ -163,26 +168,41 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                 text_units = target_fsas_vec.labels.clone().to(torch.int64)
 
                 # eps transitions
-                batch_indices.masked_fill_(last_transition_mask, 0)
-                time_indices.masked_fill_(last_transition_mask, 0)
-                unit_indices.masked_fill_(last_transition_mask, 0)
                 text_units.masked_fill_(last_transition_mask, 0)
 
                 # skip frames transitions
-                batch_indices.masked_fill_(skip_token_transition_mask, 0)
-                time_indices.masked_fill_(skip_token_transition_mask, 0)
-                unit_indices.masked_fill_(skip_token_transition_mask, 0)
                 text_units.masked_fill_(skip_token_transition_mask, 0)
 
             # NB: do not assign scores -> modify, k2 will not update all scores correctly (modify -> assign)
             scores = log_probs[batch_indices, time_indices, unit_indices, text_units]
             # fix weights for the arcs to the last state
             scores[last_transition_mask] = 0
+
             # assign skip_frame penalty to skip_frame arcs
-            scores[skip_token_transition_mask] = self.skip_token_penalty
+            assert self.blank == vocab_size - 1
+            match self.skip_token_mode:
+                case "constant":
+                    scores[skip_token_transition_mask] = self.skip_token_penalty
+                case "mean":
+                    # similar to OTC implemenetation: https://github.com/k2-fsa/icefall/blob/master/egs/librispeech/WSASR/conformer_ctc2/train.py#L568
+                    mean_logprob = torch.logsumexp(logits[..., : self.blank], dim=-1, keepdim=False) - torch.log(
+                        torch.full([batch_size], fill_value=vocab_size - 1, device=logits.device)
+                    )
+                    mean_scores = mean_logprob[batch_indices, time_indices, unit_indices]
+                    scores = torch.where(skip_token_transition_mask, mean_scores, scores)
+                    scores[skip_token_transition_mask] += self.skip_token_penalty
+                case "max":
+                    max_logprob, _ = logits[..., : self.blank].max(dim=-1, keepdim=False)
+                    max_scores = max_logprob[batch_indices, time_indices, unit_indices]
+                    scores = torch.where(skip_token_transition_mask, max_scores, scores)
+                    scores[skip_token_transition_mask] += self.skip_token_penalty
+                case _:
+                    raise NotImplementedError
 
             target_fsas_vec.scores = scores
 
             # compute loss: full-sum
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
+            if self.return_graph:
+                return scores, target_fsas_vec
             return scores

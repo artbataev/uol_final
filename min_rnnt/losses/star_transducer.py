@@ -19,6 +19,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         self,
         blank: int,
         skip_frame_penalty: float = 0.0,
+        return_graph: bool = False,
         use_grid_implementation=False,  # TODO: grid impl
         connect_composed=False,
         double_scores=False,
@@ -45,6 +46,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
             double_scores=double_scores,
             cast_to_float32=cast_to_float32,
         )
+        self.return_graph = return_graph
         self.skip_frame_penalty = skip_frame_penalty
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
@@ -190,4 +192,6 @@ class GraphStarTransducerLoss(GraphRnntLoss):
 
             # compute loss: full-sum
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
+            if self.return_graph:
+                return scores, target_fsas_vec
             return scores
