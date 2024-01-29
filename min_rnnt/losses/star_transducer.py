@@ -136,6 +136,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         vocab_size = logits.shape[-1]
         target_fsas_vec = self.get_graphs_batched(logits_lengths, targets, target_lengths, vocab_size)
 
+        # torch.cuda.set_sync_debug_mode(2)
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
         with cast_context:
             # activation: log softmax
@@ -148,21 +149,22 @@ class GraphStarTransducerLoss(GraphRnntLoss):
                 #     indices[target_fsas_vec.labels == -1] = 0
                 #     indices[target_fsas_vec.labels >= vocab_size] = 0  # special transitions
 
-                batch_size = log_probs.shape[0]
-                device = log_probs.device
-                batch_indices = torch.repeat_interleave(
-                    torch.arange(batch_size, device=device, dtype=torch.int64),
-                    torch.tensor(
-                        [target_fsas_vec.arcs.index(0, i)[0].values().shape[0] for i in range(batch_size)],
-                        device=device,
-                    ),
-                )
+                last_transition_mask = target_fsas_vec.labels == -1
+                skip_frame_transition_mask = target_fsas_vec.labels == vocab_size
+
+                # batch_size = log_probs.shape[0]
+                # device = log_probs.device
+                # batch_indices = torch.repeat_interleave(
+                #     torch.arange(batch_size, device=device, dtype=torch.int64),
+                #     torch.tensor(
+                #         [target_fsas_vec.arcs.index(0, i)[0].values().shape[0] for i in range(batch_size)],
+                #         device=device,
+                #     ),
+                # )
+                batch_indices = last_transition_mask.cumsum(dim=-1) - last_transition_mask.to(torch.long)
                 time_indices = target_fsas_vec.aux_labels.clone().to(torch.int64)
                 unit_indices = target_fsas_vec.unit_positions.clone().to(torch.int64)
                 text_units = target_fsas_vec.labels.clone().to(torch.int64)
-
-                last_transition_mask = target_fsas_vec.labels == -1
-                skip_frame_transition_mask = target_fsas_vec.labels == vocab_size
 
                 # eps transitions
                 batch_indices.masked_fill_(last_transition_mask, 0)
@@ -184,6 +186,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
             scores[skip_frame_transition_mask] = self.skip_frame_penalty  # eps
 
             target_fsas_vec.scores = scores
+            # torch.cuda.set_sync_debug_mode(0)
 
             # compute loss: full-sum
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
