@@ -61,7 +61,7 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         device = units_tensor.device
         text_len = units_tensor.shape[0]
         units = units_tensor.tolist()
-        num_levels = text_len * self.drop_prob
+        num_levels = min(text_len, int(text_len * self.drop_prob) + 1)
         arcs = []
         last_state = num_levels * (text_len + 1) * 3 + 1
         state = 0
@@ -160,7 +160,15 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
                 last_transition_mask = target_fsas_vec.labels == -1
                 skip_token_transition_mask = target_fsas_vec.labels == vocab_size
 
-                batch_indices = last_transition_mask.cumsum(dim=-1) - last_transition_mask.to(torch.long)
+                # batch_indices = last_transition_mask.cumsum(dim=-1) - last_transition_mask.to(torch.long)
+                device = logits.device
+                batch_indices = torch.repeat_interleave(
+                    torch.arange(batch_size, device=device, dtype=torch.int64),
+                    torch.tensor(
+                        [target_fsas_vec.arcs.index(0, i)[0].values().shape[0] for i in range(batch_size)],
+                        device=device,
+                    ),
+                )
                 time_indices = target_fsas_vec.aux_labels.clone().to(torch.int64)
                 unit_indices = target_fsas_vec.unit_positions.clone().to(torch.int64)
                 text_units = target_fsas_vec.labels.clone().to(torch.int64)

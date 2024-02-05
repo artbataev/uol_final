@@ -14,7 +14,12 @@ from omegaconf import DictConfig, open_dict
 from torchmetrics.text import WordErrorRate
 
 from min_rnnt.decoding import RNNTDecodingWrapper
-from min_rnnt.losses import GraphBypassTransducerLoss, GraphStarTransducerLoss, GraphTargetRobustTransducerLoss
+from min_rnnt.losses import (
+    GraphBypassMultiLevelTransducerLoss,
+    GraphBypassTransducerLoss,
+    GraphStarTransducerLoss,
+    GraphTargetRobustTransducerLoss,
+)
 from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 
@@ -74,6 +79,14 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         elif self.cfg.loss.loss_name == "bypass_t":
             self.loss = GraphBypassTransducerLoss(
                 blank=self.blank_index,
+                skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
+                skip_token_mode=self.cfg.loss.get("skip_token_mode", "mean"),
+                double_scores=True,
+            )
+        elif self.cfg.loss.loss_name == "bypass_ml_t":
+            self.loss = GraphBypassMultiLevelTransducerLoss(
+                blank=self.blank_index,
+                drop_prob=self.cfg.loss.get("drop_prob", 0.2),
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
                 skip_token_mode=self.cfg.loss.get("skip_token_mode", "mean"),
                 double_scores=True,
