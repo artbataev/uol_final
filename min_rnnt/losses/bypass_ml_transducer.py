@@ -61,7 +61,7 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         device = units_tensor.device
         text_len = units_tensor.shape[0]
         units = units_tensor.tolist()
-        num_levels = text_len * self.dro
+        num_levels = text_len * self.drop_prob
         arcs = []
         last_state = num_levels * (text_len + 1) * 3 + 1
         state = 0
@@ -80,7 +80,7 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
                 state += 1
         arcs.append([last_state])
         schema_fst_str = "\n".join([" ".join(map(str, line)) for line in arcs])
-        fsa_text = k2.Fsa.from_str(schema_fst_str, aux_label_names=["aux_labels", "unit_positions"])
+        fsa_text = k2.Fsa.from_str(schema_fst_str, aux_label_names=["aux_labels", "unit_positions"]).to(device)
         return fsa_text
 
     def get_temporal_schema(self, num_frames: int, vocab_size: int, device: torch.device) -> "k2.Fsa":
