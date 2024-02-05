@@ -250,9 +250,9 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                     ] = float("-inf")
                     sum_logprobs = torch.logsumexp(log_probs_modified[..., : self.blank], dim=-1, keepdim=False)
                     # print(max_logprob)
-                    max_scores = sum_logprobs[batch_indices, time_indices, unit_indices]
+                    sum_scores = sum_logprobs[batch_indices, time_indices, unit_indices]
                     # print(scores, max_scores)
-                    scores = torch.where(skip_token_transition_mask, max_scores, scores)
+                    scores = torch.where(skip_token_transition_mask, sum_scores, scores)
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case _:
                     raise NotImplementedError
