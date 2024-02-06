@@ -38,6 +38,66 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         device = units_tensor.device
         text_len = units_tensor.shape[0]
 
+        num_levels = min(text_len, int(text_len * drop_prob) + 1)
+        last_state = (2 * text_len + 3 - num_levels) * num_levels // 2
+        num_states = last_state + 1
+        num_states_grid = last_state
+        states_grid = torch.arange(num_states_grid, device=device)
+        num_loop_arcs = num_states_grid
+        num_forward_arcs = num_states_grid
+        num_skip_arcs = (2 * text_len - num_levels + 2) * (num_levels - 1) // 2
+        num_arcs = num_loop_arcs + num_forward_arcs + num_skip_arcs
+
+        triu_indices = torch.triu_indices(num_levels, text_len + 1, device=device)
+        levels = triu_indices[0]
+        triu_indices = triu_indices[1]
+        units_triu = torch.cat([units_tensor, torch.full([1], fill_value=-1, device=device)])[triu_indices]
+        assert triu_indices.shape[0] == num_states_grid
+
+        src_states = torch.zeros([num_arcs], device=device)
+        dst_states = torch.zeros_like(src_states)
+        units_labels = torch.zeros_like(src_states)
+        unit_positions = torch.zeros_like(src_states)
+        print(num_states, num_states_grid, num_arcs)
+
+        # self-loops
+        src_states[:num_states_grid] = states_grid
+        dst_states[:num_states_grid] = states_grid
+        units_labels[:num_states_grid] = blank_id
+        unit_positions[:num_states_grid] = triu_indices[1]
+
+        # forward
+        src_states[num_states_grid : 2 * num_states_grid] = states_grid
+        dst_states[num_states_grid : 2 * num_states_grid] = states_grid + 1
+        units_labels[num_states_grid : 2 * num_states_grid] = units_triu
+        unit_positions[num_states_grid : 2 * num_states_grid] = triu_indices
+
+        # skip
+        src_states[2 * num_states_grid :] = states_grid[units_triu != -1][:num_skip_arcs]
+        dst_states[2 * num_states_grid :] = (states_grid[units_triu != -1] + text_len - levels[units_triu != -1] + 1)[
+            :num_skip_arcs
+        ]
+        units_labels[2 * num_states_grid :] = skip_token_id
+        unit_positions[2 * num_states_grid :] = triu_indices[units_triu != -1][:num_skip_arcs]
+
+        dst_states[units_labels == -1] = last_state
+        unit_positions[units_labels == -1] = -1
+
+        arcs = torch.stack([src_states, dst_states, units_labels, torch.zeros_like(src_states)], dim=-1).to(
+            torch.int32
+        )
+        ind = torch.sort(arcs[:, 0]).indices
+        fsa_text = k2.Fsa(arcs[ind], units_labels[ind])
+        fsa_text.unit_positions = unit_positions[ind]
+        return fsa_text
+
+    def get_unit_schema_v1(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
+        blank_id = self.blank
+        drop_prob = self.drop_prob
+        skip_token_id = vocab_size
+        device = units_tensor.device
+        text_len = units_tensor.shape[0]
+
         src_states_l = []
         dst_states_l = []
         units_labels_l = []
