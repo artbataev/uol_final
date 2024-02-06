@@ -99,6 +99,7 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         indices = torch.sort(src_states).indices
         fsa_text = k2.Fsa(arcs[indices], units_labels[indices])
         fsa_text.unit_positions = unit_positions[indices]
+        return fsa_text
 
     def get_unit_schema_str(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
         """
