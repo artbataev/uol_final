@@ -58,7 +58,6 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         dst_states = torch.zeros_like(src_states)
         units_labels = torch.zeros_like(src_states)
         unit_positions = torch.zeros_like(src_states)
-        print(num_states, num_states_grid, num_arcs)
 
         # self-loops
         src_states[:num_states_grid] = states_grid
