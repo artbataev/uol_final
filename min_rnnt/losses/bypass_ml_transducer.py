@@ -32,6 +32,75 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         self.skip_token_mode = skip_token_mode
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
+        blank_id = self.blank
+        drop_prob = self.drop_prob
+        skip_token_id = vocab_size
+        device = units_tensor.device
+        text_len = units_tensor.shape[0]
+
+        src_states_l = []
+        dst_states_l = []
+        units_labels_l = []
+        unit_positions_l = []
+
+        num_levels = min(text_len, int(text_len * drop_prob) + 1)
+        last_state = (2 * text_len + 3 - num_levels) * num_levels // 2
+
+        for level in range(num_levels):
+            # arithmetic progressions sum
+            # start = ((text_len + 1) + (text_len + 1 - level + 1)) * level // 2
+            start = (2 * text_len + 3 - level) * level // 2
+            cur_num_states = text_len + 1 - level
+            cur_num_arcs = cur_num_states * 2 + (cur_num_states - 1 if level < num_levels - 1 else 0)
+            src_states = torch.zeros([cur_num_arcs], device=device)
+            dst_states = torch.zeros_like(src_states)
+            units_labels = torch.zeros_like(src_states)
+            unit_positions = torch.zeros_like(src_states)
+            states = torch.arange(start, start + cur_num_states, device=device)
+            positions = torch.arange(level, text_len + 1, device=device)
+
+            # self-loops
+            src_states[:cur_num_states] = states
+            dst_states[:cur_num_states] = states
+            units_labels[:cur_num_states] = blank_id
+            unit_positions[:cur_num_states] = positions
+
+            # forward
+            src_states[cur_num_states : 2 * cur_num_states] = states
+            dst_states[cur_num_states : 2 * cur_num_states] = states + 1
+            units_labels[cur_num_states : 2 * cur_num_states - 1] = units_tensor[level:]
+            unit_positions[cur_num_states : 2 * cur_num_states] = positions
+
+            dst_states[2 * cur_num_states - 1] = last_state
+            units_labels[2 * cur_num_states - 1] = -1
+            unit_positions[2 * cur_num_states - 1] = -1
+
+            # skip
+            if level < num_levels - 1:
+                src_states[2 * cur_num_states :] = states[:-1]
+                dst_states[2 * cur_num_states :] = states[:-1] + text_len - level + 1
+                units_labels[2 * cur_num_states :] = skip_token_id
+                unit_positions[2 * cur_num_states :] = positions[level:-1]
+
+            src_states_l.append(src_states)
+            dst_states_l.append(dst_states)
+            units_labels_l.append(units_labels)
+            unit_positions_l.append(unit_positions)
+
+        src_states = torch.cat(src_states_l)
+        dst_states = torch.cat(dst_states_l)
+        units_labels = torch.cat(units_labels_l)
+        unit_positions = torch.cat(unit_positions_l)
+        unit_positions[-1] = -1
+
+        arcs = torch.stack([src_states, dst_states, units_labels, torch.zeros_like(src_states)], dim=-1).to(
+            torch.int32
+        )
+        indices = torch.sort(src_states).indices
+        fsa_text = k2.Fsa(arcs[indices], units_labels[indices])
+        fsa_text.unit_positions = unit_positions[indices]
+
+    def get_unit_schema_str(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
         """
         Get unit schema (target text) graph for Bypass-Transducer loss (Compose-Transducer).
         Forward arcs represent text labels.
