@@ -63,7 +63,7 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         src_states[:num_states_grid] = states_grid
         dst_states[:num_states_grid] = states_grid
         units_labels[:num_states_grid] = blank_id
-        unit_positions[:num_states_grid] = triu_indices[1]
+        unit_positions[:num_states_grid] = triu_indices
 
         # forward
         src_states[num_states_grid : 2 * num_states_grid] = states_grid
@@ -260,6 +260,53 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
 
     def get_grid(self, units_tensor: torch.Tensor, num_frames: int, vocab_size: int) -> "k2.Fsa":
         raise NotImplementedError
+
+    def get_graphs_batched(
+            self, logits_lengths: torch.Tensor, targets: torch.Tensor, target_lengths: torch.Tensor, vocab_size: int
+    ) -> "k2.Fsa":
+        """
+        Get batched lattice (grid or composed) for the batch of sequences.
+
+        Args:
+            logits_lengths: tensor with lengths of logits
+            targets: tensor with target units
+            target_lengths: tensor with lengths of targets
+            vocab_size: vocab size (including blank)
+
+        Returns:
+            batched lattice - FsaVec (k2.Fsa)
+        """
+        batch_size = logits_lengths.shape[0]
+        with torch.no_grad():
+            if self.use_grid_implementation:
+                return k2.create_fsa_vec(
+                    [
+                        self.get_grid(
+                            units_tensor=targets[i, : target_lengths[i].item()],
+                            num_frames=logits_lengths[i].item(),
+                            vocab_size=vocab_size,
+                        )
+                        for i in range(batch_size)
+                    ]
+                )
+
+            # composed version
+            text_fsas = [
+                self.get_unit_schema(units_tensor=targets[i, : target_lengths[i].item()], vocab_size=vocab_size,)
+                for i in range(batch_size)
+            ]
+            temporal_fsas = [
+                self.get_temporal_schema(
+                    num_frames=logits_lengths[i].item(), vocab_size=vocab_size, device=targets.device
+                )
+                for i in range(batch_size)
+            ]
+            target_fsas_vec = k2.compose(
+                k2.create_fsa_vec(text_fsas), k2.create_fsa_vec(temporal_fsas), treat_epsilons_specially=False
+            )
+            if self.connect_composed:
+                target_fsas_vec = k2.connect(target_fsas_vec)
+        return target_fsas_vec
 
     def forward(
         self,
