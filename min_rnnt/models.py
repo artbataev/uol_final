@@ -86,7 +86,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         elif self.cfg.loss.loss_name == "bypass_ml_t":
             self.loss = GraphBypassMultiLevelTransducerLoss(
                 blank=self.blank_index,
-                drop_prob=self.cfg.loss.get("drop_prob", 0.2),
+                drop_prob=self.cfg.loss.get("token_drop_prob", 0.2),
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
                 skip_token_mode=self.cfg.loss.get("skip_token_mode", "mean"),
                 double_scores=True,
