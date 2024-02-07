@@ -262,7 +262,7 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
         raise NotImplementedError
 
     def get_graphs_batched(
-            self, logits_lengths: torch.Tensor, targets: torch.Tensor, target_lengths: torch.Tensor, vocab_size: int
+        self, logits_lengths: torch.Tensor, targets: torch.Tensor, target_lengths: torch.Tensor, vocab_size: int
     ) -> "k2.Fsa":
         """
         Get batched lattice (grid or composed) for the batch of sequences.
@@ -292,7 +292,10 @@ class GraphBypassMultiLevelTransducerLoss(GraphRnntLoss):
 
             # composed version
             text_fsas = [
-                self.get_unit_schema(units_tensor=targets[i, : target_lengths[i].item()], vocab_size=vocab_size,)
+                self.get_unit_schema(
+                    units_tensor=targets[i, : target_lengths[i].item()],
+                    vocab_size=vocab_size,
+                )
                 for i in range(batch_size)
             ]
             temporal_fsas = [

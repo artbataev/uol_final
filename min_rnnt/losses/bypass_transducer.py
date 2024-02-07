@@ -1,3 +1,4 @@
+import math
 from contextlib import nullcontext
 
 import k2
@@ -201,7 +202,6 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                 case "maxexcl":
                     device = log_probs.device
                     max_text_len = log_probs.shape[2] - 1
-                    # assert max_text_len == target_lengths.max()
                     batch_indices_f = (
                         torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, max_text_len).flatten()
                     )
@@ -221,9 +221,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                         torch.full_like(text_units_f, fill_value=self.blank),
                     ] = float("-inf")
                     max_logprob, _ = log_probs_modified[..., : self.blank].max(dim=-1, keepdim=False)
-                    # print(max_logprob)
                     max_scores = max_logprob[batch_indices, time_indices, unit_indices]
-                    # print(scores, max_scores)
                     scores = torch.where(skip_token_transition_mask, max_scores, scores)
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case "sumexcl":
@@ -249,10 +247,36 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                         torch.full_like(text_units_f, fill_value=self.blank),
                     ] = float("-inf")
                     sum_logprobs = torch.logsumexp(log_probs_modified[..., : self.blank], dim=-1, keepdim=False)
-                    # print(max_logprob)
                     sum_scores = sum_logprobs[batch_indices, time_indices, unit_indices]
-                    # print(scores, max_scores)
                     scores = torch.where(skip_token_transition_mask, sum_scores, scores)
+                    scores[skip_token_transition_mask] += self.skip_token_penalty
+                case "meanexcl":
+                    device = log_probs.device
+                    max_text_len = log_probs.shape[2] - 1
+                    # assert max_text_len == target_lengths.max()
+                    batch_indices_f = (
+                        torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, max_text_len).flatten()
+                    )
+                    unit_position_indices_f = (
+                        torch.arange(max_text_len, device=device)
+                        .unsqueeze(0)
+                        .expand(batch_size, max_text_len)
+                        .flatten()
+                    )
+                    text_units_f = targets.flatten()
+                    log_probs_modified = log_probs.clone()
+                    log_probs_modified[batch_indices_f, :, unit_position_indices_f, text_units_f] = float("-inf")
+                    log_probs_modified[
+                        batch_indices_f,
+                        :,
+                        unit_position_indices_f,
+                        torch.full_like(text_units_f, fill_value=self.blank),
+                    ] = float("-inf")
+                    mean_logprobs = torch.logsumexp(
+                        log_probs_modified[..., : self.blank], dim=-1, keepdim=False
+                    ) - math.log(vocab_size - 2)
+                    mean_scores = mean_logprobs[batch_indices, time_indices, unit_indices]
+                    scores = torch.where(skip_token_transition_mask, mean_scores, scores)
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case _:
                     raise NotImplementedError
