@@ -14,7 +14,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         skip_frame_penalty: float = 0.0,
         skip_token_penalty: float = 0.0,
         skip_token_mode: str = "maxexcl",
-        use_grid_implementation=True,  # TODO: grid impl
+        use_grid_implementation=True,
         connect_composed=False,
         double_scores=False,
         cast_to_float32=False,
