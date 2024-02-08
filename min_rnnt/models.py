@@ -96,6 +96,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
+                skip_token_mode=self.cfg.loss.get("skip_token_mode", "maxexcl"),
                 double_scores=True,
             )
         else:
