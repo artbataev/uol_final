@@ -30,6 +30,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
     https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/models/rnnt_bpe_models.py
     """
 
+    val_wer: nn.ModuleList
+
     def __init__(self, cfg: DictConfig, trainer: pl.Trainer = None):
         # setup SentencePiece tokenizer
         self._setup_tokenizer(cfg.tokenizer)
@@ -102,8 +104,6 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         else:
             raise NotImplementedError(f"loss {self.cfg.loss.loss_name} not supported")
         self.wer = ExtendedWordErrorRate(dist_sync_on_step=True)
-        # `val_wer` initially empty, later we will add wer computers after initializing validation data loaders
-        self.val_wer = nn.ModuleList([])
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
         # logging.warning(f"audio: {audio.shape}, expected BxT")
