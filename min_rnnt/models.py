@@ -11,7 +11,6 @@ from nemo.collections.asr.modules import AudioToMelSpectrogramPreprocessor, Conf
 from nemo.collections.asr.parts.k2.graph_transducer import GraphRnntLoss
 from nemo.collections.asr.parts.mixins import ASRBPEMixin
 from omegaconf import DictConfig, open_dict
-from torchmetrics.text import WordErrorRate
 
 from min_rnnt.decoding import RNNTDecodingWrapper
 from min_rnnt.losses import (
@@ -20,6 +19,7 @@ from min_rnnt.losses import (
     GraphStarTransducerLoss,
     GraphTargetRobustTransducerLoss,
 )
+from min_rnnt.metrics import ExtendedWordErrorRate
 from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 
@@ -101,9 +101,9 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             )
         else:
             raise NotImplementedError(f"loss {self.cfg.loss.loss_name} not supported")
-        self.wer = WordErrorRate(dist_sync_on_step=True)
-
-        self.val_wer: List[WordErrorRate]
+        self.wer = ExtendedWordErrorRate(dist_sync_on_step=True)
+        # `val_wer` initially empty, later we will add wer computers after initializing validation data loaders
+        self.val_wer = nn.ModuleList([])
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
         # logging.warning(f"audio: {audio.shape}, expected BxT")
@@ -147,7 +147,10 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 ]
                 self.wer.update(preds=hyps_str, target=refs_str)
                 wer_value = self.wer.compute()
-                detailed_logs["training_wer"] = wer_value
+                detailed_logs["training_wer"] = wer_value["wer"]
+                detailed_logs["training_sub"] = wer_value["substitutions"]
+                detailed_logs["training_del"] = wer_value["deletions"]
+                detailed_logs["training_ins"] = wer_value["insertions"]
                 self.wer.reset()
                 self.train()
         self.log_dict(detailed_logs)
@@ -180,7 +183,19 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             submodule.reset()
 
     def multi_validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0):
-        return {"log": {"val_wer": self.val_wer[dataloader_idx].compute()}}
+        wer_detailed = self.val_wer[dataloader_idx].compute()
+        if wer_detailed["wer"].isnan():
+            # when resuming the function can be called without real validation for all datasets,
+            # thus we do not return the metric
+            return {"log": {}}
+        return {
+            "log": {
+                "val_wer": wer_detailed["wer"],
+                "val_del": wer_detailed["deletions"],
+                "val_ins": wer_detailed["insertions"],
+                "val_sub": wer_detailed["substitutions"],
+            }
+        }
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         raise NotImplementedError  # TODO
@@ -204,7 +219,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
     def setup_multiple_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         super().setup_multiple_validation_data(val_data_config=val_data_config)
         num_val_loaders = len(self._validation_dl) if isinstance(self._validation_dl, list) else 1
-        self.val_wer = nn.ModuleList([WordErrorRate(dist_sync_on_step=True) for _ in range(num_val_loaders)])
+        self.val_wer = nn.ModuleList([ExtendedWordErrorRate(dist_sync_on_step=True) for _ in range(num_val_loaders)])
 
     def setup_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         val_data_config["shuffle"] = False
