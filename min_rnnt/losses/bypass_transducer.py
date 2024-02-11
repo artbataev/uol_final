@@ -252,7 +252,8 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                 case "constant":
                     scores[skip_token_transition_mask] = self.skip_token_penalty
                 case "mean":
-                    # similar to OTC implemenetation: https://github.com/k2-fsa/icefall/blob/master/egs/librispeech/WSASR/conformer_ctc2/train.py#L568
+                    # similar to OTC implemenetation:
+                    # https://github.com/k2-fsa/icefall/blob/master/egs/librispeech/WSASR/conformer_ctc2/train.py#L568
                     mean_logprob = torch.logsumexp(log_probs[..., : self.blank], dim=-1, keepdim=False) - torch.log(
                         torch.full([batch_size], fill_value=vocab_size - 1, device=log_probs.device)
                         .unsqueeze(-1)

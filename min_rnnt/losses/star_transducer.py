@@ -174,7 +174,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
 
             # NB: do not assign scores -> modify, k2 will not update all scores correctly (modify -> assign)
             scores = log_probs[batch_indices, time_indices, unit_indices, text_units]
-            # fix weights for the arcs to the last state
+            # fix weights for the arcs to the last state - special for k2
             scores[last_transition_mask] = 0
             # assign skip_frame penalty to skip_frame arcs
             scores[skip_frame_transition_mask] = self.skip_frame_penalty
