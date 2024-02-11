@@ -6,7 +6,7 @@ from min_rnnt.models import MinRNNTModel
 
 
 def main():
-    cfg = OmegaConf.load("/scripts/conf/fast_conformer_transducer_min.yaml")
+    cfg = OmegaConf.load("conf/fast_conformer_transducer_min.yaml")
     OmegaConf.resolve(cfg)
 
     cfg.trainer.devices = "auto"
