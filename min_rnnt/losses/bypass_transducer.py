@@ -213,6 +213,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         # logits: B x Time x Text+1 x C
         vocab_size = logits.shape[-1]
         batch_size = logits.shape[0]
+        device = logits.device
         target_fsas_vec = self.get_graphs_batched(logits_lengths, targets, target_lengths, vocab_size)
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
@@ -223,7 +224,13 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                 last_transition_mask = target_fsas_vec.labels == -1
                 skip_token_transition_mask = target_fsas_vec.labels == vocab_size
 
-                batch_indices = last_transition_mask.cumsum(dim=-1) - last_transition_mask.to(torch.long)
+                batch_indices = torch.repeat_interleave(
+                    torch.arange(batch_size, device=device, dtype=torch.int64),
+                    torch.tensor(
+                        [target_fsas_vec.arcs.index(0, i)[0].values().shape[0] for i in range(batch_size)],
+                        device=device,
+                    ),
+                )
                 time_indices = target_fsas_vec.aux_labels.clone().to(torch.int64)
                 unit_indices = target_fsas_vec.unit_positions.clone().to(torch.int64)
                 text_units = target_fsas_vec.labels.clone().to(torch.int64)
