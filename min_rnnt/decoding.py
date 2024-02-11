@@ -61,10 +61,9 @@ class RNNTDecodingWrapper(nn.Module):
         for time_i in range(max_time):
             encoder_vec = encoder_output[time_i]  # get current encoder vector
 
-            all_blank_found = False
             symbols_added = 0
-            blank_mask = time_i >= encoder_lengths  # use labels only if we are not out-of-sequence
-            while not all_blank_found and (
+            blank_or_end_mask = time_i >= encoder_lengths  # use labels only if we are not out-of-sequence
+            while not blank_or_end_mask.all() and (
                 self.max_symbols_per_step is None or symbols_added < self.max_symbols_per_step
             ):
                 prev_state = state  # cache previous state
@@ -82,23 +81,24 @@ class RNNTDecodingWrapper(nn.Module):
                     .squeeze(1)
                     .squeeze(1)
                 )
-                # greedy: get labels with maximum probability (maximum logit is enough)
+                # greedy: get labels with maximum probability (maximum logit id is enough)
                 labels = joint_output.argmax(dim=1)
 
                 # check if labels are blank
-                blank_mask.bitwise_or_(labels == self.blank_index)
+                blank_or_end_mask.logical_or_(labels == self.blank_index)
 
-                if blank_mask.all():
-                    all_blank_found = True  # transition to the next encoder frames, end loop
-                else:
-                    non_blank_indices = (blank_mask == False).nonzero(as_tuple=False).squeeze(1)
+                if not blank_or_end_mask.all():
+                    # some labels found, not all are blank
+                    non_blank_indices = (~blank_or_end_mask).nonzero(as_tuple=False).squeeze(1)
                     # store found non-blank symbols
                     for i in non_blank_indices.tolist():
                         hyps[i].append(labels[i].item())
                     symbols_added += 1
 
-                if blank_mask.any():
-                    blank_indices = blank_mask.nonzero(as_tuple=False).squeeze(1)
+                if blank_or_end_mask.any():
+                    # restore prediction network state for blank labels:
+                    # network state should be updated only if non-blank found
+                    blank_indices = blank_or_end_mask.nonzero(as_tuple=False).squeeze(1)
                     if prev_state is not None:
                         if isinstance(state, tuple):  # Lstm
                             # restore state for found blank labels
@@ -107,7 +107,7 @@ class RNNTDecodingWrapper(nn.Module):
                         else:
                             raise NotImplementedError
                     else:
-                        # start of the decoding,
+                        # prev_state is None, start of the decoding loop
                         if isinstance(state, tuple):
                             # restore 0 initial state for found blank labels
                             for i, sub_state in enumerate(state):
