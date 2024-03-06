@@ -13,7 +13,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         blank: int,
         skip_frame_penalty: float = 0.0,
         skip_token_penalty: float = 0.0,
-        skip_token_mode: str = "maxexcl",
+        skip_token_mode: str = "sumexcl",
         use_grid_implementation=True,
         connect_composed=False,
         double_scores=False,
@@ -22,16 +22,18 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         """
         Init method
 
-        Args:
-            blank: blank label index
-            skip_frame_penalty: weight of epsilon transitions, 0 means no penalty (default)
-            use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
-            connect_composed: Connect graph after composing unit and temporal schemas
+        :param blank: blank label index
+        :param skip_frame_penalty: weight of epsilon transitions, 0 means no penalty (default)
+        :param skip_token_penalty: weight of skip token transition, 0 means no penalty
+        :param skip_token_mode: mode to assign weight to skip token transition,
+                options "sumexcl" (default, found to be best), "maxexcl", "meanexcl", "sum", "mean", "const"
+        :param use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
+        :param connect_composed: Connect graph after composing unit and temporal schemas
                 (only for Compose-Transducer). `connect` operation is slow, it is useful for visualization,
                 but not necessary for loss computation.
-            double_scores: Use calculation of loss in double precision (float64) in the lattice.
-                Does not significantly affect memory usage since the lattice is ~V/2 times smaller than the joint tensor.
-            cast_to_float32: Force cast joint tensor to float32 before log-softmax calculation.
+        :param double_scores: Use calculation of loss in double precision (float64) in the lattice.
+            Does not significantly affect memory usage since the lattice is ~V/2 times smaller than the joint tensor.
+        :param cast_to_float32: Force cast joint tensor to float32 before log-softmax calculation.
         """
         super().__init__(
             blank=blank,
@@ -50,19 +52,6 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         """
         Get unit schema (target text) graph for Star-Transducer loss (Compose-Transducer).
         Forward arcs represent text labels.
-
-        Example graph: text [1, 2], blank=0. Eps id: 3.
-
-        graph::
-
-                0:0:0                  0:0:1                  0:0:2
-              +-------+              +-------+              +-------+
-              v       |    1:1:0     v       |              v       |
-            +-----------+ -------> +-----------+  2:2:1   +-----------+  -1:-1:-1  #===#
-            |     0     |  4:4:0   |     1     | -------> |     2     | ---------> H 3 H
-            +-----------+ -------> +-----------+          +-----------+            #===#
-              ^ 3:3:0 |              ^ 3:3:1 |              ^ 3:3:2 |
-              +-------+              +-------+              +-------+
 
         Args:
             units_tensor: 1d tensor with text units
