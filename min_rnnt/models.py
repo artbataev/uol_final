@@ -128,7 +128,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             target_lengths=targets_lengths,
         )
         loss_value = self.loss(acts=joint, act_lens=encoded_audio_lengths, labels=targets, label_lens=targets_lengths)
-        loss_value = loss_value.sum() / targets_lengths.sum()  # TODO: make parameter - reduction
+        # mean volume reduction according to Fast Conformer original recipe in NeMo
+        loss_value = loss_value.sum() / targets_lengths.sum()
 
         assert self.trainer is not None, "Trainer should be set if training_step is called"
         detailed_logs = dict()
