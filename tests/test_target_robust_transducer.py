@@ -7,7 +7,7 @@ from min_rnnt.losses import GraphBypassTransducerLoss, GraphStarTransducerLoss, 
 class TestTargetRobustTransducerLoss:
     @pytest.mark.parametrize("skip_token_penalty", [0.0, -1.0, -5.0])
     @pytest.mark.parametrize("use_grid_implementation", [False, True])
-    @pytest.mark.parametrize("skip_token_mode", ["constant", "mean", "max", "maxexcl", "meanexcl"])
+    @pytest.mark.parametrize("skip_token_mode", ["sumexcl", "constant", "mean", "max", "maxexcl", "meanexcl"])
     def test_match_bypass_transducer(
         self, skip_token_penalty: float, use_grid_implementation: bool, skip_token_mode: str
     ):
