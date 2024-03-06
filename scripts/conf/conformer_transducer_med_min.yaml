@@ -3,13 +3,13 @@
 # https://github.com/NVIDIA/NeMo/blob/v1.21.0/examples/asr/conf/fastconformer/fast-conformer_transducer_bpe.yaml
 # We reuse audio preprocessor and encoder (Fast Conformer) from NeMo, Joint and Prediction networks are custom
 
-name: "FastConformer-Transducer-BPE-Min"
+name: "Conformer-Transducer-Medium-BPE-Min"
 
 model:
   sample_rate: 16000
 
   model_defaults:
-    d_model: 512
+    d_model: 256
     pred_hidden: 640
     joint_hidden: 640
 
@@ -74,13 +74,13 @@ model:
   encoder:
     feat_in: ${model.preprocessor.features}
     feat_out: -1 # you may set it if you need different output size other than the default d_model
-    n_layers: 17
+    n_layers: 16
     d_model: ${model.model_defaults.d_model}
 
     # Sub-sampling parameters
-    subsampling: dw_striding # vggnet, striding, stacking or stacking_norm, dw_striding
-    subsampling_factor: 8 # must be power of 2 for striding and vggnet
-    subsampling_conv_channels: 256 # set to -1 to make it equal to the d_model
+    subsampling: striding # vggnet, striding, stacking or stacking_norm, dw_striding
+    subsampling_factor: 4 # must be power of 2 for striding and vggnet
+    subsampling_conv_channels: -1 # set to -1 to make it equal to the d_model
     causal_downsampling: false
 
     # Reduction parameters: Can be used to add another subsampling layer at a given position.
@@ -95,16 +95,16 @@ model:
 
     # Multi-headed Attention Module's params
     self_attention_model: rel_pos # rel_pos or abs_pos
-    n_heads: 8 # may need to be lower for smaller d_models
+    n_heads: 4 # may need to be lower for smaller d_models
     # [left, right] specifies the number of steps to be seen from left and right of each step in self-attention
-    att_context_size: [-1, -1] # -1 means unlimited context
+    att_context_size: [ -1, -1 ] # -1 means unlimited context
     att_context_style: regular # regular or chunked_limited
     xscaling: true # scales up the input embeddings by sqrt(d_model)
     untie_biases: true # unties the biases of the TransformerXL layers
     pos_emb_max_len: 5000
 
     # Convolution module's params
-    conv_kernel_size: 9
+    conv_kernel_size: 31
     conv_norm_type: 'batch_norm' # batch_norm or layer_norm or groupnormN (N specifies the number of groups)
     # conv_context_size can be"causal" or a list of two integers while conv_context_size[0]+conv_context_size[1]+1==conv_kernel_size
     # null means [(kernel_size-1)//2, (kernel_size-1)//2], and 'causal' means [(kernel_size-1), 0]
