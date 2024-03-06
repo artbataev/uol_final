@@ -10,7 +10,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
     """
     This loss is a modified version of Graph-Transducer, see
     https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/parts/k2/graph_transducer.py
-    We add skip_token arcs parallel to blank arcs to allow the loss to take into account
+    We add skip_frame arcs parallel to blank arcs to allow the loss to take into account
     alignments, where some time frames are skipped: useful for training RNN-T with partial transcripts
     (deletions in ground truth texts)
     """
@@ -117,7 +117,67 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         return fsa_temporal
 
     def get_grid(self, units_tensor: torch.Tensor, num_frames: int, vocab_size: int) -> "k2.Fsa":
-        raise NotImplementedError
+        blank_id = self.blank
+        skip_frame_id = vocab_size  # outside vocab
+
+        text_length = units_tensor.shape[0]
+        device = units_tensor.device
+        num_grid_states = num_frames * (text_length + 1)
+        num_blank_arcs = (num_frames - 1) * (text_length + 1)
+        num_text_arcs = text_length * num_frames
+        arcs = torch.zeros((num_blank_arcs * 2 + num_text_arcs + 2, 4), dtype=torch.int32, device=device)
+        # blank transitions
+        # i, i+<text_len + 1>, 0 <blank>, i / <text_len+1>, i % <text_len + 1>
+        from_states = torch.arange(num_blank_arcs, device=device)
+        to_states = from_states + (text_length + 1)
+
+        # blank
+        arcs[:num_blank_arcs, 0] = from_states
+        arcs[:num_blank_arcs, 1] = to_states
+        arcs[:num_blank_arcs, 2] = blank_id
+
+        # skip_frame
+        arcs[num_blank_arcs : num_blank_arcs * 2, 0] = from_states
+        arcs[num_blank_arcs : num_blank_arcs * 2, 1] = to_states
+        arcs[num_blank_arcs : num_blank_arcs * 2, 2] = skip_frame_id
+
+        # text arcs
+        from_states = (
+            torch.arange(num_grid_states, dtype=torch.int32, device=device)
+            .reshape(num_frames, text_length + 1)[:, :-1]
+            .flatten()
+        )
+        to_states = from_states + 1
+        ilabels = units_tensor.expand(num_frames, -1).flatten()
+        arcs[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 0] = from_states
+        arcs[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 1] = to_states
+        arcs[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 2] = ilabels
+
+        # last 2 states
+        arcs[-2, :3] = torch.tensor((num_grid_states - 1, num_grid_states, blank_id), dtype=torch.int32, device=device)
+        arcs[-1, :3] = torch.tensor((num_grid_states, num_grid_states + 1, -1), dtype=torch.int32, device=device)
+
+        # sequence indices, time indices
+        olabels = torch.div(arcs[:, 0], (text_length + 1), rounding_mode="floor")  # arcs[:, 0] // (text_length + 1)
+        unit_positions = arcs[:, 0] % (text_length + 1)
+        # last state: final
+        olabels[-1] = -1
+        unit_positions[-1] = -1
+
+        # relabel
+        # instead of using top sort (extremely expensive) k2.top_sort(rnnt_graph)
+        arcs[:-2, 0] = self.relabel_states(arcs[:-2, 0], text_length + 1, num_frames)
+        arcs[:-3, 1] = self.relabel_states(arcs[:-3, 1], text_length + 1, num_frames)
+
+        # sort by start state - required in k2
+        indices = torch.argsort(arcs[:, 0], dim=0)
+        sorted_arcs = arcs[indices]
+        olabels = olabels[indices]
+        unit_positions = unit_positions[indices]
+
+        rnnt_graph = k2.Fsa(sorted_arcs, olabels)
+        rnnt_graph.unit_positions = unit_positions
+        return rnnt_graph
 
     def forward(
         self,
