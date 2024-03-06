@@ -13,12 +13,7 @@ from nemo.collections.asr.parts.mixins import ASRBPEMixin
 from omegaconf import DictConfig, open_dict
 
 from min_rnnt.decoding import RNNTDecodingWrapper
-from min_rnnt.losses import (
-    GraphBypassMultiLevelTransducerLoss,
-    GraphBypassTransducerLoss,
-    GraphStarTransducerLoss,
-    GraphTargetRobustTransducerLoss,
-)
+from min_rnnt.losses import GraphBypassTransducerLoss, GraphStarTransducerLoss, GraphTargetRobustTransducerLoss
 from min_rnnt.metrics import ExtendedWordErrorRate
 from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
@@ -81,14 +76,6 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         elif self.cfg.loss.loss_name == "bypass_t":
             self.loss = GraphBypassTransducerLoss(
                 blank=self.blank_index,
-                skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
-                skip_token_mode=self.cfg.loss.get("skip_token_mode", "mean"),
-                double_scores=True,
-            )
-        elif self.cfg.loss.loss_name == "bypass_ml_t":
-            self.loss = GraphBypassMultiLevelTransducerLoss(
-                blank=self.blank_index,
-                drop_prob=self.cfg.loss.get("token_drop_prob", 0.2),
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
                 skip_token_mode=self.cfg.loss.get("skip_token_mode", "mean"),
                 double_scores=True,
@@ -158,7 +145,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         return {"loss": loss_value}
 
     def on_train_epoch_start(self) -> None:
-        if self.cfg.loss.loss_name in {"bypass_t", "bypass_ml_t", "trt"}:
+        if self.cfg.loss.loss_name in {"bypass_t", "trt"}:
             initial_skip_token_penalty = self.cfg.loss.get("skip_token_penalty", 0.0)
             if self.trainer.current_epoch > self.skip_token_decay_min_epoch:
                 self.loss.skip_token_penalty = initial_skip_token_penalty * (
