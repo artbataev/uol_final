@@ -1,4 +1,5 @@
 import math
+import random
 from contextlib import nullcontext
 
 import k2
@@ -18,6 +19,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         connect_composed=False,
         double_scores=False,
         cast_to_float32=False,
+        use_alignment_prob=0.0,
     ):
         """
         Init method
@@ -47,6 +49,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         self.skip_frame_id_rel = 0  # skip_frame_id = vocab_size + 0
         self.skip_token_id_rel = 1  # skip_token_id = vocab_size + 1
         self.skip_token_mode = skip_token_mode
+        self.use_alignment_prob = use_alignment_prob
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
         """
@@ -380,5 +383,18 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                     raise NotImplementedError
 
             target_fsas_vec.scores = scores
+            if self.use_alignment_prob > 0.0 and random.random() < self.use_alignment_prob:
+                shortest_paths = k2.shortest_path(target_fsas_vec, use_double_scores=True)
+                aligned_to_special_tokens = torch.logical_or(
+                    shortest_paths.labels == skip_frame_id, shortest_paths.labels == skip_token_id
+                )
+                aligned_batch_indices = torch.unique((batch_indices + 1) * aligned_to_special_tokens) - 1
+                aligned_batch_indices_set = set(aligned_batch_indices.tolist())
+                not_aligned_batch_indices_set = set(range(batch_size)) - aligned_batch_indices_set
+                not_aligned_batch_indices = torch.tensor(list(not_aligned_batch_indices_set), device=device)
+                batch_mask = (batch_indices.unsqueeze(0) == not_aligned_batch_indices.unsqueeze(-1)).any(dim=0)
+                skip_transition_mask = torch.logical_or(skip_token_transition_mask, skip_frame_transition_mask)
+                scores[torch.logical_and(skip_transition_mask, batch_mask)] = float("-inf")
+                target_fsas_vec.scores = scores
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
             return scores
