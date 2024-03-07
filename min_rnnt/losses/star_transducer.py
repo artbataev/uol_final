@@ -20,7 +20,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         blank: int,
         skip_frame_penalty: float = 0.0,
         return_graph: bool = False,
-        use_grid_implementation=False,  # TODO: grid impl
+        use_grid_implementation=True,
         connect_composed=False,
         double_scores=False,
         cast_to_float32=False,
