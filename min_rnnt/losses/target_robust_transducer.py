@@ -385,10 +385,19 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
             target_fsas_vec.scores = scores
             if self.use_alignment_prob > 0.0 and random.random() < self.use_alignment_prob:
                 shortest_paths = k2.shortest_path(target_fsas_vec, use_double_scores=True)
+                shortest_paths_batch_indices = torch.repeat_interleave(
+                    torch.arange(batch_size, device=device, dtype=torch.int64),
+                    torch.tensor(
+                        [shortest_paths.arcs.index(0, i)[0].values().shape[0] for i in range(batch_size)],
+                        device=device,
+                    ),
+                )
                 aligned_to_special_tokens = torch.logical_or(
                     shortest_paths.labels == skip_frame_id, shortest_paths.labels == skip_token_id
                 )
-                aligned_batch_indices = torch.unique((batch_indices + 1) * aligned_to_special_tokens) - 1
+                aligned_batch_indices = (
+                    torch.unique((shortest_paths_batch_indices + 1) * aligned_to_special_tokens) - 1
+                )
                 aligned_batch_indices_set = set(aligned_batch_indices.tolist())
                 not_aligned_batch_indices_set = set(range(batch_size)) - aligned_batch_indices_set
                 not_aligned_batch_indices = torch.tensor(list(not_aligned_batch_indices_set), device=device)
