@@ -104,7 +104,6 @@ class MinPredictionNetwork(nn.Module):
                 ],
                 dim=-1,
             )
-        # TODO: packed sequence
         input_prefix_embed = self.embedding(input_prefix)
         output, state = self.rnn(input_prefix_embed.transpose(0, 1), state)
         return output.transpose(0, 1), state
