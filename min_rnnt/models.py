@@ -20,9 +20,18 @@ from min_rnnt.modules import MinJoint, MinPredictionNetwork
 
 class MinRNNTModel(ASRModel, ASRBPEMixin):
     """
-    Minimal RNN-T model with custom MinJoint and MinPredictionNetwork modules, reuses Encoder and data loader from NeMo,
+    Minimal RNN-T model with custom MinJoint and MinPredictionNetwork modules,
+    reuses Encoder and data loader from NeMo,
     customized from
     https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/models/rnnt_bpe_models.py
+    Main customization:
+    - our implementation of Joint and Prediction network
+    - custom losses
+    - our metric for WER to log not only WER, but separately its components (DEL, INS, SUB)
+    Reused:
+    - encoder (Conformer)
+    - data loaders
+    - logging (including automatic WandB logging)
     """
 
     val_wer: nn.ModuleList
@@ -47,7 +56,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         # Encoder part
         self.encoder = ConformerEncoder(**cfg.encoder)
 
-        # Precition and Joint networks
+        # Precition and Joint networks - we use our implementation instead of NeMo
         with open_dict(self.cfg):
             self.cfg.prediction_network["vocab_size"] = vocabulary_size
         prediction_network = MinPredictionNetwork(**self.cfg.prediction_network)
@@ -94,16 +103,13 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.wer = ExtendedWordErrorRate(dist_sync_on_step=True)
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
-        # logging.warning(f"audio: {audio.shape}, expected BxT")
         audio_features, audio_features_lengths = self.preprocessor(
             input_signal=audio,
             length=audio_lengths,
         )
-        # logging.warning(f"audio_features: {audio_features.shape}, expected BxDxT")
         if self.spec_aug is not None and self.training:
             audio_features = self.spec_aug(input_spec=audio_features, length=audio_features_lengths)
         encoded_audio, encoded_audio_lengths = self.encoder(audio_signal=audio_features, length=audio_features_lengths)
-        # logging.warning(f"encoded audio {encoded_audio.shape}, expected BxDxT")
         return encoded_audio, encoded_audio_lengths
 
     def training_step(self, batch, batch_nb):
@@ -168,6 +174,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.val_wer[dataloader_idx].update(preds=hyps_str, target=refs_str)
 
     def on_validation_start(self):
+        # reset validation metric
         for submodule in self.val_wer:
             submodule.reset()
 
@@ -187,13 +194,18 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         }
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        raise NotImplementedError  # TODO
+        # return hypotheses predicted from the audio
+        audio, audio_lengths, targets, targets_lengths = batch
+        encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
+        hyps = self.decoding.greedy_decode(encoder_output=encoded_audio, encoder_lengths=encoded_audio_lengths)
+        return hyps
 
     def setup_training_data(self, train_data_config: Union[DictConfig, Dict]):
+        """Derived from NeMo"""
         train_data_config["shuffle"] = True
         self._update_dataset_config(dataset_name="train", config=train_data_config)
         self._train_dl = self._setup_dataloader_from_config(config=train_data_config)
-        # TODO: fix tqdm bar?
+        # this is a fix for tqdm bar ported from NeMo
         if (
             self._train_dl is not None
             and hasattr(self._train_dl, "dataset")
@@ -215,10 +227,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self._update_dataset_config(dataset_name="validation", config=val_data_config)
         self._validation_dl = self._setup_dataloader_from_config(config=val_data_config)
 
-    def setup_test_data(self, test_data_config: Union[DictConfig, Dict]):
-        pass
-
     def _setup_dataloader_from_config(self, config: Optional[Dict]):
+        """Taken from NeMo ASR Model as described above"""
         dataset = audio_to_text_dataset.get_audio_to_text_bpe_dataset_from_config(
             config=config,
             local_rank=self.local_rank,
@@ -255,4 +265,5 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         )
 
     def transcribe(self, paths2audio_files: List[str], batch_size: int = 4, verbose: bool = True) -> List[str]:
+        """We avoid implementing transcribe function, since for our project we need only validation logic"""
         raise NotImplementedError
