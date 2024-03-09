@@ -1,3 +1,4 @@
+import k2
 import pytest
 import torch
 
@@ -5,6 +6,29 @@ from min_rnnt.losses import GraphBypassTransducerLoss, GraphStarTransducerLoss, 
 
 
 class TestTargetRobustTransducerLoss:
+    """
+    Target-Robust Transducer loss unit tests.
+    We test that
+    - grid and composed lattices are equivalent
+    - when skip token penalty is -inf, the loss and gradient are equivalent to Star-Transducer loss
+    - when skip frame penalty is -inf, the loss and gradient are equivalent to Bypass-Transducer loss
+    """
+
+    def test_grid_vs_compose_equivalence(self):
+        vocab_size = 10
+        units_tensor = torch.tensor([2, 5, 1, 6, 0])
+        loss_composed = GraphTargetRobustTransducerLoss(blank=vocab_size - 1, use_grid_implementation=False)
+        loss_grid = GraphTargetRobustTransducerLoss(blank=vocab_size - 1, use_grid_implementation=True)
+
+        composed_lattice = loss_composed.get_composed_lattice(
+            units_tensor=units_tensor, num_frames=10, vocab_size=vocab_size
+        )
+        composed_lattice = k2.connect(composed_lattice)
+
+        grid_lattice = loss_grid.get_grid(units_tensor=units_tensor, num_frames=10, vocab_size=vocab_size)
+
+        assert k2.is_rand_equivalent(composed_lattice, grid_lattice, log_semiring=True)
+
     @pytest.mark.parametrize("skip_token_penalty", [0.0, -1.0, -5.0])
     @pytest.mark.parametrize("use_grid_implementation", [False, True])
     @pytest.mark.parametrize("skip_token_mode", ["sumexcl", "constant", "mean", "max", "maxexcl", "meanexcl"])

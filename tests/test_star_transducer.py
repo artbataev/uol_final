@@ -7,6 +7,14 @@ from min_rnnt.losses import GraphStarTransducerLoss
 
 
 class TestStarTransducerLoss:
+    """
+    Star Transducer loss unit tests.
+    We test that
+    - grid and composed lattices are equivalent
+    - when skip frame penalty is -inf, the loss and gradient are equivalent to RNN-T
+    (compare with the reference loss - GraphRnntLoss from NeMo)
+    """
+
     def test_grid_vs_compose_equivalence(self):
         vocab_size = 10
         units_tensor = torch.tensor([2, 5, 1, 6, 0])

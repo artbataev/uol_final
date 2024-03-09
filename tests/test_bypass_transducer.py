@@ -7,7 +7,16 @@ from min_rnnt.losses import GraphBypassTransducerLoss
 
 
 class TestBypassTransducerLoss:
+    """
+    Bypass-Transducer loss unit tests.
+    We test that
+    - grid and composed lattices are equivalent
+    - when skip token penalty is -inf, the loss and gradient are equivalent to RNN-T
+    (compare with the reference loss - GraphRnntLoss from NeMo)
+    """
+
     def test_grid_vs_compose_equivalence(self):
+        """test grid and composed lattices are equivalent"""
         vocab_size = 10
         units_tensor = torch.tensor([2, 5, 1, 6, 0])
         loss_composed = GraphBypassTransducerLoss(blank=vocab_size - 1, use_grid_implementation=False)

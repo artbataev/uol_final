@@ -4,7 +4,10 @@ from min_rnnt.metrics import ExtendedWordErrorRate
 
 
 class TestExtendedWordErrorRate:
+    """Unit tests for ExtendedWordErrorRate metric based on jiwer"""
+
     def test_single(self):
+        """Test single update"""
         metric = ExtendedWordErrorRate()
         metric.update(preds="one two three", target="one two tree")
         result = metric.compute()
@@ -14,6 +17,7 @@ class TestExtendedWordErrorRate:
         assert result["insertions"].item() == pytest.approx(0)
 
     def test_multiple(self):
+        """Test muptiple updates"""
         metric = ExtendedWordErrorRate()
         metric.update(preds=["one two three"], target=["one two tree"])  # one substitution
         metric.update(preds=["four five six"], target=["four five"])  # one insertions
