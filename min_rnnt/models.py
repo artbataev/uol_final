@@ -227,6 +227,11 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self._update_dataset_config(dataset_name="validation", config=val_data_config)
         self._validation_dl = self._setup_dataloader_from_config(config=val_data_config)
 
+    def setup_test_data(self, test_data_config: Union[DictConfig, Dict]):
+        test_data_config["shuffle"] = False
+        self._update_dataset_config(dataset_name="test", config=test_data_config)
+        self._test_dl = self._setup_dataloader_from_config(config=test_data_config)
+
     def _setup_dataloader_from_config(self, config: Optional[Dict]):
         """Taken from NeMo ASR Model as described above"""
         dataset = audio_to_text_dataset.get_audio_to_text_bpe_dataset_from_config(
