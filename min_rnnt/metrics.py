@@ -8,7 +8,8 @@ from torchmetrics.metric import Metric
 
 class ExtendedWordErrorRate(Metric):
     """
-    This class is an extended implementation, derived from torchmetrics.text.WordErrorRate
+    This class is an extended implementation for Word Error Rage metric,
+    derived from torchmetrics.text.WordErrorRate
     https://github.com/Lightning-AI/torchmetrics/blob/master/src/torchmetrics/text/wer.py
     and jiwer docs https://jitsi.github.io/jiwer/reference/measures/
     Computes WER along with its components (deletions, insertions, substitutions)
@@ -31,8 +32,10 @@ class ExtendedWordErrorRate(Metric):
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
+        # add states for WER (errors and number of observed targets)
         self.add_state("errors", tensor(0, dtype=torch.float), dist_reduce_fx="sum")
         self.add_state("total", tensor(0, dtype=torch.float), dist_reduce_fx="sum")
+        # add states for WER components
         self.add_state("del_", tensor(0, dtype=torch.float), dist_reduce_fx="sum")
         self.add_state("sub", tensor(0, dtype=torch.float), dist_reduce_fx="sum")
         self.add_state("ins", tensor(0, dtype=torch.float), dist_reduce_fx="sum")
@@ -44,13 +47,16 @@ class ExtendedWordErrorRate(Metric):
         if isinstance(target, str):
             target = [target]
         measures = jiwer.compute_measures(truth=target, hypothesis=preds)
+        # update states for WER
         self.errors += measures["deletions"] + measures["insertions"] + measures["substitutions"]
         self.total += measures["hits"] + measures["deletions"] + measures["substitutions"]
+        # update WER components
         self.del_ += measures["deletions"]
         self.ins += measures["insertions"]
         self.sub += measures["substitutions"]
 
     def compute(self) -> Dict[str, Tensor]:
+        # return metric as dict
         return dict(
             wer=self.errors / self.total,
             deletions=self.del_ / self.total,
