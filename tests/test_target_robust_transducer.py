@@ -49,16 +49,18 @@ class TestTargetRobustTransducerLoss:
         device = torch.device("cpu")
         trt_loss = GraphTargetRobustTransducerLoss(
             blank=blank_id,
-            skip_frame_penalty=float("-inf"),
+            skip_frame_penalty=float("-inf"),  # skip frame penalty -inf
             skip_token_penalty=skip_token_penalty,
             double_scores=True,
             use_grid_implementation=use_grid_implementation,
             skip_token_mode=skip_token_mode,
         )
+        # etalon: Bypass-Transducer loss
         bypass_loss = GraphBypassTransducerLoss(
             blank=blank_id, skip_token_penalty=skip_token_penalty, double_scores=True, skip_token_mode=skip_token_mode
         )
 
+        # generate random logits (outputs from Joint) and targets
         logits = torch.rand(
             [2, encoder_output_length, units_lengths + 1, vocab_size], requires_grad=True, device=device
         )
@@ -66,16 +68,23 @@ class TestTargetRobustTransducerLoss:
         input_lengths = torch.tensor([encoder_output_length, encoder_output_length - 1]).to(device)
         target_lengths = torch.tensor([units_lengths, units_lengths - 2]).to(device)
 
+        # clone logits to get the gradient from the second computation
         logits2 = logits.detach()
         logits2.requires_grad_(True)
 
+        # compute Target Robust transducer loss values
         trt_loss_value = trt_loss(logits, targets, input_lengths, target_lengths)
+        # backward for gradient
         trt_loss_value.mean().backward()
 
+        # compute Bypass Transducer loss values
         bypass_loss_value = bypass_loss(logits2, targets, input_lengths, target_lengths)
+        # backward for gradients
         bypass_loss_value.mean().backward()
 
+        # check values are the same
         assert torch.allclose(trt_loss_value, bypass_loss_value)
+        # check gradients are the same
         assert torch.allclose(logits.grad, logits2.grad)
 
     @pytest.mark.parametrize("skip_frame_penalty", [0.0, -1.0, -5.0])
@@ -87,16 +96,19 @@ class TestTargetRobustTransducerLoss:
         encoder_output_length = 7
         units_lengths = 5
         device = torch.device("cpu")
+        # instantiate Target Robust Transducer loss
         trt_loss = GraphTargetRobustTransducerLoss(
             blank=blank_id,
             skip_frame_penalty=skip_frame_penalty,
-            skip_token_penalty=float("-inf"),
+            skip_token_penalty=float("-inf"),  # skip token penalty -inf
             double_scores=True,
             use_grid_implementation=use_grid_implementation,
             skip_token_mode="constant",
         )
+        # etalon: Star-Transducer loss
         star_loss = GraphStarTransducerLoss(blank=blank_id, skip_frame_penalty=skip_frame_penalty, double_scores=True)
 
+        # generate random logits (Joint output) and targets
         logits = torch.rand(
             [2, encoder_output_length, units_lengths + 1, vocab_size], requires_grad=True, device=device
         )
@@ -104,14 +116,21 @@ class TestTargetRobustTransducerLoss:
         input_lengths = torch.tensor([encoder_output_length, encoder_output_length - 1]).to(device)
         target_lengths = torch.tensor([units_lengths, units_lengths - 2]).to(device)
 
+        # clone logits for the gradient from the second computation
         logits2 = logits.detach()
         logits2.requires_grad_(True)
 
+        # compute Target-Robust Transducer loss values
         trt_loss_value = trt_loss(logits, targets, input_lengths, target_lengths)
+        # backward for gradient
         trt_loss_value.mean().backward()
 
+        # compute etalon - Star Transducer loss values
         star_loss_value = star_loss(logits2, targets, input_lengths, target_lengths)
+        # backward for gradient
         star_loss_value.mean().backward()
 
+        # check values are the same
         assert torch.allclose(trt_loss_value, star_loss_value)
+        # check gradients are the same
         assert torch.allclose(logits.grad, logits2.grad)
