@@ -1,3 +1,5 @@
+"""Script for generating artificially corrupted data based on NeMo manifests."""
+
 import argparse
 import itertools
 import random

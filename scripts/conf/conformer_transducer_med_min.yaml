@@ -1,7 +1,10 @@
+# Config for training Conformer-Medium model with MinRNNTModel wrapper
 # This config is derived from Conformer config in NeMo
 # https://github.com/NVIDIA/NeMo/blob/v1.21.0/examples/asr/conf/conformer/conformer_transducer_bpe.yaml
 # https://github.com/NVIDIA/NeMo/blob/v1.21.0/examples/asr/conf/fastconformer/fast-conformer_transducer_bpe.yaml
-# We reuse audio preprocessor and encoder (Fast Conformer) from NeMo, Joint and Prediction networks are custom
+# We reuse audio preprocessor and encoder (Conformer Medium) from NeMo + data loaders (train_ds, validation_ds, test_ds)
+# Joint and Prediction networks are custom
+# losses are also custom
 
 name: "Conformer-Transducer-Medium-BPE-Min"
 
@@ -71,6 +74,7 @@ model:
     freq_width: 27
     time_width: 0.05
 
+  # Conformer Medium Encoder
   encoder:
     feat_in: ${model.preprocessor.features}
     feat_out: -1 # you may set it if you need different output size other than the default d_model
@@ -135,9 +139,14 @@ model:
   decoding:
     max_symbols: 10
 
+  # Customized loss parameters, different from NeMo
   loss:
-    loss_name: "rnnt"
+    loss_name: "rnnt" # choices: rnnt, star_t, bypass_t, trt
+    skip_frame_penalty: 0.0  # for star_t, trt
+    skip_token_penalty: 0.0  # for bypass_t, trt
+    skip_token_mode: "sumexcl" # for bypass_t, trt
 
+  # Same as for Fast Conformer, see the link above
   optim:
     name: adamw
     lr: 5e-3
@@ -153,6 +162,7 @@ model:
       warmup_ratio: null
       min_lr: 5e-4
 
+# Trainer and Exp Manager - standard for NeMo
 trainer:
   devices: -1 # number of GPUs, -1 would use all available GPUs
   num_nodes: 1

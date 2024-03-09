@@ -86,7 +86,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             self.loss = GraphBypassTransducerLoss(
                 blank=self.blank_index,
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
-                skip_token_mode=self.cfg.loss.get("skip_token_mode", "meanexcl"),
+                skip_token_mode=self.cfg.loss.get("skip_token_mode", "sumexcl"),
                 double_scores=True,
             )
         elif self.cfg.loss.loss_name == "trt":
@@ -94,7 +94,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
-                skip_token_mode=self.cfg.loss.get("skip_token_mode", "meanexcl"),
+                skip_token_mode=self.cfg.loss.get("skip_token_mode", "sumexcl"),
                 use_alignment_prob=self.cfg.loss.get("use_alignment_prob", 0.0),
                 double_scores=True,
             )

@@ -1,5 +1,7 @@
 # Code for the Final Project: RNN-Transducer-based Losses for Speech Recognition on Noisy Targets
 
+The losses are planned to be proposed to the [NeMo](https://github.com/nvidia/nemo) framework.
+
 ## Structure
 
 ```
