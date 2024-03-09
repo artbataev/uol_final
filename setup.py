@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 setup(
     name="min_rnnt",
     version="0.0.1",
-    description="Min RNNT for experiments",
+    description="Min RNNT for experiments with custom losses",
     author="Vladimir Bataev",
     author_email="artbataev@gmail.com",
     url="https://github.com/artbataev/uol_final",
