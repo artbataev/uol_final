@@ -15,18 +15,24 @@ class TestTargetRobustTransducerLoss:
     """
 
     def test_grid_vs_compose_equivalence(self):
+        """Test that grid and composed lattices are equivalent"""
+        # use small vocab of 10 and a tensor with units [2, 5, 1, 6, 0]
         vocab_size = 10
         units_tensor = torch.tensor([2, 5, 1, 6, 0])
         loss_composed = GraphTargetRobustTransducerLoss(blank=vocab_size - 1, use_grid_implementation=False)
         loss_grid = GraphTargetRobustTransducerLoss(blank=vocab_size - 1, use_grid_implementation=True)
 
+        # get composed lattice
         composed_lattice = loss_composed.get_composed_lattice(
             units_tensor=units_tensor, num_frames=10, vocab_size=vocab_size
         )
+        # apply "connect" operation to remove unreachable states (which do not affect loss computation)
         composed_lattice = k2.connect(composed_lattice)
 
+        # get grid (directly constructed lattice)
         grid_lattice = loss_grid.get_grid(units_tensor=units_tensor, num_frames=10, vocab_size=vocab_size)
 
+        # check equivalence
         assert k2.is_rand_equivalent(composed_lattice, grid_lattice, log_semiring=True)
 
     @pytest.mark.parametrize("skip_token_penalty", [0.0, -1.0, -5.0])
@@ -35,6 +41,7 @@ class TestTargetRobustTransducerLoss:
     def test_match_bypass_transducer(
         self, skip_token_penalty: float, use_grid_implementation: bool, skip_token_mode: str
     ):
+        """When skip frame penalty is -inf, the loss and gradient should be equivalent to Bypass-Transducer loss"""
         vocab_size = 10
         blank_id = vocab_size - 1
         encoder_output_length = 7
@@ -74,6 +81,7 @@ class TestTargetRobustTransducerLoss:
     @pytest.mark.parametrize("skip_frame_penalty", [0.0, -1.0, -5.0])
     @pytest.mark.parametrize("use_grid_implementation", [False, True])
     def test_match_star_transducer(self, skip_frame_penalty: float, use_grid_implementation: bool):
+        """When skip token penalty is -inf, the loss and gradient should be equivalent to Star-Transducer loss"""
         vocab_size = 10
         blank_id = vocab_size - 1
         encoder_output_length = 7
