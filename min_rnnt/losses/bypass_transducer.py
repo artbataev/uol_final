@@ -8,6 +8,17 @@ from nemo.collections.asr.parts.k2.graph_transducer import GraphRnntLoss, force_
 
 
 class GraphBypassTransducerLoss(GraphRnntLoss):
+    """
+    Original implementation of Bypass-Transducer loss.
+    The implementation is based on "Graph-based framework  for RNN-Transducer losses",
+    For the original implementation see
+    https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/parts/k2/graph_transducer.py
+
+    In this loss we augment the RNN-Transducer with additional skip_token transitions parallel to blank arcs
+    to allow the loss to take into account alignments, where some tokens are inserted.
+    The loss is useful for training RNN-T system with transcripts containing extra words (insertions).
+    """
+
     def __init__(
         self,
         blank: int,

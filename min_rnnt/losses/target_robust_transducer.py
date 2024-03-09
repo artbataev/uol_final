@@ -9,6 +9,18 @@ from nemo.collections.asr.parts.k2.graph_transducer import GraphRnntLoss, force_
 
 
 class GraphTargetRobustTransducerLoss(GraphRnntLoss):
+    """
+    Original implementation of Target-Robust Transducer loss.
+    The implementation is based on "Graph-based framework  for RNN-Transducer losses",
+    For the original implementation see
+    https://github.com/NVIDIA/NeMo/blob/v1.21.0/nemo/collections/asr/parts/k2/graph_transducer.py
+
+    This loss it the combination of Bypass Transducer and Star Transducer losses:  we augment the RNN-Transducer
+    with additional skip_frame arcs parallel to blank arcs and skip_token arcs parallel to text arcs.
+    The loss is useful for training RNN-T system with partially correct transcripts
+    (with substitutions or arbitrary errors).
+    """
+
     def __init__(
         self,
         blank: int,
