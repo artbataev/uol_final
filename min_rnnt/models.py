@@ -40,6 +40,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         # setup SentencePiece tokenizer
         self._setup_tokenizer(cfg.tokenizer)
 
+        # get vocabulary size and blank index (outside the vocabulary)
         vocabulary = self.tokenizer.tokenizer.get_vocab()
         vocabulary_size = len(vocabulary)
         if hasattr(self.tokenizer, "pad_id") and self.tokenizer.pad_id > 0:
@@ -50,19 +51,25 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
 
         super().__init__(cfg=cfg, trainer=trainer)
 
+        # preprocessor and spec augment modules from NeMo
         self.preprocessor = AudioToMelSpectrogramPreprocessor(**cfg.preprocessor)
         self.spec_aug = SpectrogramAugmentation(**cfg.spec_augment) if cfg.spec_augment else None
 
-        # Encoder part
+        # Encoder part - Conformer Encoder from NeMo
         self.encoder = ConformerEncoder(**cfg.encoder)
 
-        # Precition and Joint networks - we use our implementation instead of NeMo
+        # Prediction and Joint networks - we use our implementation instead of NeMo
+        # instantiate prediction network
         with open_dict(self.cfg):
             self.cfg.prediction_network["vocab_size"] = vocabulary_size
         prediction_network = MinPredictionNetwork(**self.cfg.prediction_network)
+
+        # instantiate joint netowkr
         with open_dict(self.cfg):
             self.cfg.joint["output_size"] = vocabulary_size + 1  # vocab + blank
         joint = MinJoint(**self.cfg.joint)
+
+        # decoding wrapper module for Joint and Prediction networks
         self.decoding = RNNTDecodingWrapper(
             prediction_network=prediction_network,
             joint=joint,
@@ -75,14 +82,17 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         self.skip_token_penalty_end = self.cfg.loss.get("skip_token_penalty_end", 0.0)
         self.skip_token_decay_min_epoch = 3
         if self.cfg.loss.loss_name == "rnnt":
+            # standard RNN-T (Graph RNN-T loss from NeMo)
             self.loss = GraphRnntLoss(blank=self.blank_index, double_scores=True)
         elif self.cfg.loss.loss_name == "star_t":
+            # original: Star Transducer loss
             self.loss = GraphStarTransducerLoss(
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
                 double_scores=True,
             )
         elif self.cfg.loss.loss_name == "bypass_t":
+            # original: Bypass Transducer loss
             self.loss = GraphBypassTransducerLoss(
                 blank=self.blank_index,
                 skip_token_penalty=self.cfg.loss.get("skip_token_penalty", 0.0),
@@ -90,6 +100,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 double_scores=True,
             )
         elif self.cfg.loss.loss_name == "trt":
+            # original: Target Robust Transducer loss
+            # NB: use_alignment_prob is a parameter for future exploration, not used in the project (0 by default)
             self.loss = GraphTargetRobustTransducerLoss(
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
@@ -100,46 +112,61 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             )
         else:
             raise NotImplementedError(f"loss {self.cfg.loss.loss_name} not supported")
+
+        # WER metric to compute WER in training
         self.wer = ExtendedWordErrorRate(dist_sync_on_step=True)
 
     def forward(self, audio: torch.Tensor, audio_lengths: torch.Tensor):
+        """Forward step: encoder only, following NeMo model style"""
         audio_features, audio_features_lengths = self.preprocessor(
             input_signal=audio,
             length=audio_lengths,
         )
+        # spec augnment - apply only in training
         if self.spec_aug is not None and self.training:
             audio_features = self.spec_aug(input_spec=audio_features, length=audio_features_lengths)
+        # get encoder output
         encoded_audio, encoded_audio_lengths = self.encoder(audio_signal=audio_features, length=audio_features_lengths)
         return encoded_audio, encoded_audio_lengths
 
     def training_step(self, batch, batch_nb):
         audio, audio_lengths, targets, targets_lengths = batch
+        # get encoder ouptut
         encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
+        # get joint output (forward pass, training)
         joint = self.decoding(
             encoder_output=encoded_audio,
             encoder_lengths=encoded_audio_lengths,
             targets=targets,
             target_lengths=targets_lengths,
         )
+        # compute loss value
         loss_value = self.loss(acts=joint, act_lens=encoded_audio_lengths, labels=targets, label_lens=targets_lengths)
         # mean volume reduction according to Fast Conformer original recipe in NeMo
         loss_value = loss_value.sum() / targets_lengths.sum()
 
         assert self.trainer is not None, "Trainer should be set if training_step is called"
+        # log the training state
         detailed_logs = dict()
         detailed_logs["train_loss"] = loss_value.item()
         detailed_logs["learning_rate"] = self._optimizer.param_groups[0]["lr"]
         detailed_logs["global_step"] = self.trainer.global_step
         sample_id = self.trainer.global_step
         if sample_id % self.trainer.log_every_n_steps == 0:
+            # decode and log in training
             with torch.no_grad():
+                # set to eval mode
                 self.eval()
+                # decode the encoder output
                 hyps = self.decoding.greedy_decode(encoder_output=encoded_audio, encoder_lengths=encoded_audio_lengths)
+                # convert hypotheses to strings
                 hyps_str = [self.tokenizer.ids_to_text(current_hyp) for current_hyp in hyps]
                 batch_size = targets.shape[0]
+                # convert reference to strings
                 refs_str = [
                     self.tokenizer.ids_to_text(targets[i, : targets_lengths[i]].tolist()) for i in range(batch_size)
                 ]
+                # compute wer and components
                 self.wer.update(preds=hyps_str, target=refs_str)
                 wer_value = self.wer.compute()
                 detailed_logs["training_wer"] = wer_value["wer"]
@@ -147,7 +174,9 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 detailed_logs["training_del"] = wer_value["deletions"]
                 detailed_logs["training_ins"] = wer_value["insertions"]
                 self.wer.reset()
+                # set to train mode
                 self.train()
+        # log results
         self.log_dict(detailed_logs)
         return {"loss": loss_value}
 
