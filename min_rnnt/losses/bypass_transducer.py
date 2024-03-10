@@ -41,6 +41,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         :param skip_token_penalty: weight of skip token transition, 0 means no penalty
         :param skip_token_mode: mode to assign weight to skip token transition,
                 options "sumexcl" (default, found to be best), "maxexcl", "meanexcl", "sum", "mean", "const"
+        :param return_graph: return graph with loss from forward (False by default)
         :param use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
         :param connect_composed: Connect graph after composing unit and temporal schemas
                 (only for Compose-Transducer). `connect` operation is slow, it is useful for visualization,
@@ -199,8 +200,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         olabels[-1] = -1
         unit_positions[-1] = -1
 
-        # relabel
-        # instead of using top sort (extremely expensive) k2.top_sort(rnnt_graph)
+        # relabel states to speedup k2 computations, reusing method from original GraphRnntLoss
         arcs[:-2, 0] = self.relabel_states(arcs[:-2, 0], text_length + 1, num_frames)
         arcs[:-3, 1] = self.relabel_states(arcs[:-3, 1], text_length + 1, num_frames)
 
@@ -233,6 +233,10 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         vocab_size = logits.shape[-1]
         batch_size = logits.shape[0]
         device = logits.device
+
+        # construct computational lattices (composed or directly grids)
+        # the method is reused from GraphRnntLoss, and retrieves composition or lattice directly
+        # for each item in the batch, based on self.use_grid_implementation parameter
         target_fsas_vec = self.get_graphs_batched(logits_lengths, targets, target_lengths, vocab_size)
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()

@@ -35,16 +35,16 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         """
         Init method
 
-        Args:
-            blank: blank label index
-            skip_frame_penalty: weight of skip frame transitions, 0 means no penalty (default)
-            use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
-            connect_composed: Connect graph after composing unit and temporal schemas
+        :param blank: blank label index
+        :param skip_frame_penalty: weight of epsilon transitions, 0 means no penalty (default)
+        :param return_graph: return graph with loss from forward (False by default)
+        :param use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
+        :param connect_composed: Connect graph after composing unit and temporal schemas
                 (only for Compose-Transducer). `connect` operation is slow, it is useful for visualization,
                 but not necessary for loss computation.
-            double_scores: Use calculation of loss in double precision (float64) in the lattice.
-                Does not significantly affect memory usage since the lattice is ~V/2 times smaller than the joint tensor.
-            cast_to_float32: Force cast joint tensor to float32 before log-softmax calculation.
+        :param double_scores: Use calculation of loss in double precision (float64) in the lattice.
+            Does not significantly affect memory usage since the lattice is ~V/2 times smaller than the joint tensor.
+        :param cast_to_float32: Force cast joint tensor to float32 before log-softmax calculation.
         """
         super().__init__(
             blank=blank,
@@ -57,128 +57,158 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         self.skip_frame_penalty = skip_frame_penalty
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
-        """construct WFST from text units"""
+        """
+        Construct WFST from text units.
+        Compared to standard RNN-T we add <skip frame> self-loops along with blank self-loops.
+        """
         blank_id = self.blank
         skip_frame_id = vocab_size
         device = units_tensor.device
         text_len = units_tensor.shape[0]
 
-        # arcs: scr, dest, label, score
-        units_arcs = torch.zeros(((text_len + 1) * 3, 4), dtype=torch.int32, device=device)
+        # units_transitions: scr, dest, label, score (k2 convention)
+        units_transitions = torch.zeros(((text_len + 1) * 3, 4), dtype=torch.int32, device=device)
         text_indices = torch.arange(0, text_len + 1, dtype=torch.int32, device=device)
         # fill blank labels: self-loops, each 3rd element
-        units_arcs[0:-1:3, 0] = text_indices  # from state
-        units_arcs[0:-1:3, 1] = text_indices  # to state
-        units_arcs[0:-1:3, 2] = blank_id
+        units_transitions[0:-1:3, 0] = text_indices  # from state
+        units_transitions[0:-1:3, 1] = text_indices  # to state
+        units_transitions[0:-1:3, 2] = blank_id
 
         # skip_frame labels: each 3rd element starting from 1, self-loops
-        units_arcs[1:-1:3, 0] = text_indices  # from state
-        units_arcs[1:-1:3, 1] = text_indices  # to state
-        units_arcs[1:-1:3, 2] = skip_frame_id
+        units_transitions[1:-1:3, 0] = text_indices  # from state
+        units_transitions[1:-1:3, 1] = text_indices  # to state
+        units_transitions[1:-1:3, 2] = skip_frame_id
 
         # text labels
-        units_arcs[2::3, 0] = text_indices  # from state
-        units_arcs[2::3, 1] = text_indices + 1  # to state
-        units_arcs[2:-1:3, 2] = units_tensor  # labels: text
-        units_arcs[-1, 2] = -1  # last transition to final state, ilabel=-1 (special for k2)
-        olabels = units_arcs[:, 2].detach().clone()  # same as ilabels, text units
+        units_transitions[2::3, 0] = text_indices  # from state
+        units_transitions[2::3, 1] = text_indices + 1  # to state -> next to text_indices
+        units_transitions[2:-1:3, 2] = units_tensor  # labels: text units
 
-        fsa_units = k2.Fsa(units_arcs, olabels)
-        fsa_units.unit_positions = text_indices.expand(3, -1).transpose(0, 1).flatten()
-        fsa_units.unit_positions[-1] = -1
-        return fsa_units
+        # last transition to final state, ilabel=-1 (special for k2)
+        units_transitions[-1, 2] = -1
+        # output labels: same as input labels = text units
+        olabels = units_transitions[:, 2].detach().clone()
+
+        # constract fsa
+        fsa_units_start = k2.Fsa(units_transitions, olabels)
+        # fill in unit positions
+        fsa_units_start.unit_positions = text_indices.expand(3, -1).transpose(0, 1).flatten()
+        fsa_units_start.unit_positions[-1] = -1  # last transition, k2 convention
+        return fsa_units_start
 
     def get_temporal_schema(self, num_frames: int, vocab_size: int, device: torch.device) -> "k2.Fsa":
-        """Construct WFST for temporal schema"""
+        """
+        Construct WFST for temporal schema.
+        Parallel to blank transitions we add 'skip frame' transitions
+        """
         # input labels: all text units
         # output labels: time indices
         blank_id = self.blank
 
-        temporal_arcs = torch.zeros((num_frames * (vocab_size + 1), 4), dtype=torch.int32, device=device)
+        temporal_transitions = torch.zeros((num_frames * (vocab_size + 1), 4), dtype=torch.int32, device=device)
         time_ids = torch.arange(0, num_frames, dtype=torch.int32, device=device)
-        # for every state - vocab_size arcs, [0, 1, ..., vocab_size-1, 0, 1, ..., vocab_size-1, ...]
         start_states = time_ids.expand(vocab_size + 1, num_frames).transpose(0, 1).flatten()
-        # first: make all arcs - self-loops
-        temporal_arcs[:, 0] = start_states  # from
-        temporal_arcs[:, 1] = start_states  # to
-        temporal_arcs[:, 2] = (
+        # self-loops: emit all tokens from the vocabulary;
+        # then replace transitions to next state when necessary
+        temporal_transitions[:, 0] = start_states  # from
+        temporal_transitions[:, 1] = start_states  # to
+        temporal_transitions[:, 2] = (
             torch.arange(0, vocab_size + 1, dtype=torch.int32, device=device)
             .expand(num_frames, vocab_size + 1)
             .flatten()
         )
-
-        # blank-arcs: forward
-        temporal_arcs[blank_id : -1 : vocab_size + 1, 1] = time_ids + 1
+        # add blank transitions: forward (by time)
+        temporal_transitions[blank_id : -1 : vocab_size + 1, 1] = time_ids + 1
         # skip_frame arcs: forward (parallel to blank)
-        temporal_arcs[vocab_size : -1 : vocab_size + 1, 1] = (time_ids + 1)[:-1]
+        temporal_transitions[vocab_size : -1 : vocab_size + 1, 1] = (time_ids + 1)[:-1]
 
-        # transition to the last final state
-        temporal_arcs[-1, :3] = torch.tensor((num_frames, num_frames + 1, -1), dtype=torch.int32, device=device)
+        # add transition to the last final state (should be separated in k2)
+        temporal_transitions[-1, :3] = torch.tensor((num_frames, num_frames + 1, -1), dtype=torch.int32, device=device)
 
         # output symbols: position in the sequence, same as start states for all arcs
-        olabels = temporal_arcs[:, 0].detach().clone()
-        olabels[-1] = -1  # special: last arc to the final state
+        olabels = temporal_transitions[:, 0].detach().clone()
+        # special for k2 transition to the last state with label -1
+        olabels[-1] = -1
 
-        fsa_temporal = k2.Fsa(temporal_arcs, olabels)
-        fsa_temporal = k2.arc_sort(fsa_temporal)  # need for compose
-        return fsa_temporal
+        # construct FSA
+        fsa_temporal_start = k2.Fsa(temporal_transitions, olabels)
+        # sort arcs - necessary for composition
+        fsa_temporal_start = k2.arc_sort(fsa_temporal_start)
+        return fsa_temporal_start
 
     def get_grid(self, units_tensor: torch.Tensor, num_frames: int, vocab_size: int) -> "k2.Fsa":
+        """
+        Directly construct lattice for Star-Transducer
+        We use grid labeled enumerated by rows/columns
+        """
         blank_id = self.blank
-        skip_frame_id = vocab_size  # outside vocab
+        # skip frame id - outside vocab
+        skip_frame_id = vocab_size
 
         text_length = units_tensor.shape[0]
         device = units_tensor.device
+
+        # construct grid: num-frames * (text-length + 1);
+        # we add +1 to test length, since the text is padded with SOS,
+        # and blank should be emitted at the end
         num_grid_states = num_frames * (text_length + 1)
         num_blank_arcs = (num_frames - 1) * (text_length + 1)
         num_text_arcs = text_length * num_frames
-        arcs = torch.zeros((num_blank_arcs * 2 + num_text_arcs + 2, 4), dtype=torch.int32, device=device)
-        # blank transitions
-        # i, i+<text_len + 1>, 0 <blank>, i / <text_len+1>, i % <text_len + 1>
+        transitions = torch.zeros((num_blank_arcs * 2 + num_text_arcs + 2, 4), dtype=torch.int32, device=device)
+        # blank and skip frame transitions - parallel
         from_states = torch.arange(num_blank_arcs, device=device)
-        to_states = from_states + (text_length + 1)
+        to_states = from_states + (text_length + 1)  # by grid construction
 
-        # blank
-        arcs[:num_blank_arcs, 0] = from_states
-        arcs[:num_blank_arcs, 1] = to_states
-        arcs[:num_blank_arcs, 2] = blank_id
+        # blank transitions
+        transitions[:num_blank_arcs, 0] = from_states
+        transitions[:num_blank_arcs, 1] = to_states
+        transitions[:num_blank_arcs, 2] = blank_id
 
-        # skip_frame
-        arcs[num_blank_arcs : num_blank_arcs * 2, 0] = from_states
-        arcs[num_blank_arcs : num_blank_arcs * 2, 1] = to_states
-        arcs[num_blank_arcs : num_blank_arcs * 2, 2] = skip_frame_id
+        # skip_frame transitions
+        transitions[num_blank_arcs : num_blank_arcs * 2, 0] = from_states
+        transitions[num_blank_arcs : num_blank_arcs * 2, 1] = to_states
+        transitions[num_blank_arcs : num_blank_arcs * 2, 2] = skip_frame_id
 
-        # text arcs
+        # text transitions
         from_states = (
             torch.arange(num_grid_states, dtype=torch.int32, device=device)
             .reshape(num_frames, text_length + 1)[:, :-1]
             .flatten()
         )
-        to_states = from_states + 1
-        ilabels = units_tensor.expand(num_frames, -1).flatten()
-        arcs[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 0] = from_states
-        arcs[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 1] = to_states
-        arcs[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 2] = ilabels
+        to_states = from_states + 1  # states are enumerated by text transitions
+        text_labels = units_tensor.expand(num_frames, -1).flatten()
+        transitions[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 0] = from_states
+        transitions[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 1] = to_states
+        transitions[num_blank_arcs * 2 : num_blank_arcs * 2 + num_text_arcs, 2] = text_labels
 
         # last 2 states
-        arcs[-2, :3] = torch.tensor((num_grid_states - 1, num_grid_states, blank_id), dtype=torch.int32, device=device)
-        arcs[-1, :3] = torch.tensor((num_grid_states, num_grid_states + 1, -1), dtype=torch.int32, device=device)
+        # emit blank last
+        transitions[-2, :3] = torch.tensor(
+            (num_grid_states - 1, num_grid_states, blank_id), dtype=torch.int32, device=device
+        )
+        # special to k2 transition to final state with -1 label
+        transitions[-1, :3] = torch.tensor(
+            (num_grid_states, num_grid_states + 1, -1), dtype=torch.int32, device=device
+        )
 
-        # sequence indices, time indices
-        olabels = torch.div(arcs[:, 0], (text_length + 1), rounding_mode="floor")  # arcs[:, 0] // (text_length + 1)
-        unit_positions = arcs[:, 0] % (text_length + 1)
-        # last state: final
+        # unit indices, time indices
+        # construct time indices
+        # transitions[:, 0] // (text_length + 1)
+        olabels = torch.div(transitions[:, 0], (text_length + 1), rounding_mode="floor")
+        # construct unit indices
+        unit_positions = transitions[:, 0] % (text_length + 1)
+        # last state: final - special `-1` transition
         olabels[-1] = -1
         unit_positions[-1] = -1
 
-        # relabel
-        # instead of using top sort (extremely expensive) k2.top_sort(rnnt_graph)
-        arcs[:-2, 0] = self.relabel_states(arcs[:-2, 0], text_length + 1, num_frames)
-        arcs[:-3, 1] = self.relabel_states(arcs[:-3, 1], text_length + 1, num_frames)
+        # relabel states to speedup k2 computations, reusing method from original GraphRnntLoss
+        transitions[:-2, 0] = self.relabel_states(transitions[:-2, 0], text_length + 1, num_frames)
+        transitions[:-3, 1] = self.relabel_states(transitions[:-3, 1], text_length + 1, num_frames)
 
         # sort by start state - required in k2
-        indices = torch.argsort(arcs[:, 0], dim=0)
-        sorted_arcs = arcs[indices]
+        indices = torch.argsort(transitions[:, 0], dim=0)
+        # store sorted components: transitions, output labels (time indices), unit positions
+        sorted_arcs = transitions[indices]
         olabels = olabels[indices]
         unit_positions = unit_positions[indices]
 
@@ -201,21 +231,27 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         # argument names are consistent with NeMo, see RNNTLoss.forward
         logits, targets, logits_lengths, target_lengths = acts, labels, act_lens, label_lens
 
-        # logits: B x Time x Text+1 x C
+        # logits: Batch x Time x TextUnits+1 x Vocab
         vocab_size = logits.shape[-1]
         batch_size = logits.shape[0]
         device = logits.device
+        # construct computational lattices (composed or directly grids)
+        # the method is reused from GraphRnntLoss, and retrieves composition or lattice directly
+        # for each item in the batch, based on self.use_grid_implementation parameter
         target_fsas_vec = self.get_graphs_batched(logits_lengths, targets, target_lengths, vocab_size)
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
         with cast_context:
-            # activation: log softmax
+            # use activation: log softmax (log probabilities - output of Joint)
             log_probs = F.log_softmax(logits, dim=-1)
 
             with torch.no_grad():
+                # mask for last transition - for all graphs
                 last_transition_mask = target_fsas_vec.labels == -1
+                # mask for skip frame transitions - for all graphs
                 skip_frame_transition_mask = target_fsas_vec.labels == vocab_size
 
+                # batch indices for all graph transitions
                 batch_indices = torch.repeat_interleave(
                     torch.arange(batch_size, device=device, dtype=torch.int64),
                     torch.tensor(
@@ -227,7 +263,8 @@ class GraphStarTransducerLoss(GraphRnntLoss):
                 unit_indices = target_fsas_vec.unit_positions.clone().to(torch.int64)
                 text_units = target_fsas_vec.labels.clone().to(torch.int64)
 
-                # eps transitions
+                # fill in the indices outside the logits with 0, replace later
+                # last transitions
                 batch_indices.masked_fill_(last_transition_mask, 0)
                 time_indices.masked_fill_(last_transition_mask, 0)
                 unit_indices.masked_fill_(last_transition_mask, 0)
@@ -239,16 +276,17 @@ class GraphStarTransducerLoss(GraphRnntLoss):
                 unit_indices.masked_fill_(skip_frame_transition_mask, 0)
                 text_units.masked_fill_(skip_frame_transition_mask, 0)
 
-            # NB: do not assign scores -> modify, k2 will not update all scores correctly (modify -> assign)
+            # fill in transition scroes
             scores = log_probs[batch_indices, time_indices, unit_indices, text_units]
-            # fix weights for the arcs to the last state - special for k2
+            # fix weights for the transitions to the last state (special for k2)
             scores[last_transition_mask] = 0
             # assign skip_frame penalty to skip_frame arcs
             scores[skip_frame_transition_mask] = self.skip_frame_penalty
 
+            # assign scores to graphs
             target_fsas_vec.scores = scores
 
-            # compute loss: full-sum
+            # compute loss: full-sum loss using k2 graph method
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
             if self.return_graph:
                 return scores, target_fsas_vec

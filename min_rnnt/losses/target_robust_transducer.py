@@ -223,8 +223,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         olabels[-1] = -1
         unit_positions[-1] = -1
 
-        # relabel
-        # instead of using top sort (extremely expensive) k2.top_sort(rnnt_graph)
+        # relabel states to speedup k2 computations, reusing method from original GraphRnntLoss
         arcs[:-2, 0] = self.relabel_states(arcs[:-2, 0], text_length + 1, num_frames)
         arcs[:-3, 1] = self.relabel_states(arcs[:-3, 1], text_length + 1, num_frames)
 
@@ -257,6 +256,10 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         vocab_size = logits.shape[-1]
         batch_size = logits.shape[0]
         device = logits.device
+
+        # construct computational lattices (composed or directly grids)
+        # the method is reused from GraphRnntLoss, and retrieves composition or lattice directly
+        # for each item in the batch, based on self.use_grid_implementation parameter
         target_fsas_vec = self.get_graphs_batched(logits_lengths, targets, target_lengths, vocab_size)
 
         skip_frame_id = vocab_size + self.skip_frame_id_rel
