@@ -6,12 +6,11 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
-from nemo.collections.common.parts.rnn import LSTMDropout
 
 
 class LSTMWithDropout(nn.Module):
     """
-    Simple LSTM with dropout
+    Simple LSTM with dropout, useful for Prediction Network
     """
 
     def __init__(
@@ -24,20 +23,31 @@ class LSTMWithDropout(nn.Module):
     ):
         super().__init__()
 
+        # LSTM
         self.lstm = torch.nn.LSTM(
-            input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, dropout=dropout, proj_size=proj_size
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            proj_size=proj_size,
         )
-        self.dropout = torch.nn.Dropout(dropout) if dropout else None
+        # Dropout
+        if dropout is not None:
+            self.dropout = torch.nn.Dropout(dropout)
+        else:
+            self.dropout = None
 
     def forward(
-        self, x: torch.Tensor, h: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        self, prev_output: torch.Tensor, prev_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        x, h = self.lstm(x, h)
+        # get lstm output and new state
+        lstm_output, lstm_state = self.lstm(prev_output, prev_state)
 
+        # apply dropout if necessary
         if self.dropout is not None:
-            x = self.dropout(x)
+            lstm_output = self.dropout(lstm_output)
 
-        return x, h
+        return lstm_output, lstm_state
 
 
 class MinJoint(nn.Module):
@@ -56,8 +66,10 @@ class MinJoint(nn.Module):
         dropout: float = 0.2,
     ):
         super().__init__()
+        # 2 projections: encoder + prediction network
         self.encoder_projection = nn.Linear(encoder_output_dim, joint_hidden_dim)
         self.prediction_projection = nn.Linear(prediction_output_dim, joint_hidden_dim)
+        # ReLU -> Dropout -> Linear (projection to vocab size)
         self.joint_network = nn.Sequential(
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -65,8 +77,11 @@ class MinJoint(nn.Module):
         )
 
     def forward(self, encoder_output: torch.Tensor, prediction_output: torch.Tensor):
-        encoder_projected = self.encoder_projection(encoder_output).unsqueeze(dim=2)  # B, T, 1, H
-        prediction_projected = self.prediction_projection(prediction_output).unsqueeze(dim=1)  # B, 1, U, H
+        # projection shape: Batch, Time, 1, Hidden
+        encoder_projected = self.encoder_projection(encoder_output).unsqueeze(dim=2)
+        # projection shape: Batch, 1, Units, Hidden
+        prediction_projected = self.prediction_projection(prediction_output).unsqueeze(dim=1)
+        # sum and compute joint
         return self.joint_network(encoder_projected + prediction_projected)
 
 
@@ -77,19 +92,13 @@ class MinPredictionNetwork(nn.Module):
 
     def __init__(self, vocab_size: int, hidden_dim: int, dropout: float = 0.2, num_layers: int = 1):
         super().__init__()
+        # blank for padding
         self.blank_index = vocab_size
+        # embedding
         self.embedding = nn.Embedding(vocab_size + 1, embedding_dim=hidden_dim, padding_idx=self.blank_index)
-        # TODO: Fix LSTM with Dropout
-        # self.rnn = LSTMWithDropout(
-        #     input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, proj_size=0
-        # )
-        self.rnn = LSTMDropout(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            dropout=dropout,
-            proj_size=0,
-            forget_gate_bias=1.0,
+        # rnn (LSTM)
+        self.rnn = LSTMWithDropout(
+            input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, proj_size=0
         )
 
     def forward(self, input_prefix: torch.Tensor, input_lengths: torch.Tensor, state=None, add_sos: bool = True):
@@ -108,6 +117,8 @@ class MinPredictionNetwork(nn.Module):
                 ],
                 dim=-1,
             )
+        # get embed input prefix
         input_prefix_embed = self.embedding(input_prefix)
+        # get output and state from recurrent prediction network
         output, state = self.rnn(input_prefix_embed.transpose(0, 1), state)
         return output.transpose(0, 1), state

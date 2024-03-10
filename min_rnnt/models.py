@@ -134,6 +134,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         return encoded_audio, encoded_audio_lengths
 
     def training_step(self, batch, batch_nb):
+        """Training step: compute and return loss"""
         audio, audio_lengths, targets, targets_lengths = batch
         # get encoder ouptut
         encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
@@ -202,22 +203,33 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             self.log("skip_token_penalty", self.loss.skip_token_penalty)
 
     def validation_step(self, batch, batch_nb, dataloader_idx=0):
+        """Validation step: decode and compute WER"""
         audio, audio_lengths, targets, targets_lengths = batch
+        # get encoder output
         encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
+        # greedy decode hypotheses
         hyps = self.decoding.greedy_decode(encoder_output=encoded_audio, encoder_lengths=encoded_audio_lengths)
+        # convert hypotheses to strings
         hyps_str = [self.tokenizer.ids_to_text(current_hyp) for current_hyp in hyps]
+        # get references as strings
         batch_size = targets.shape[0]
         refs_str = [self.tokenizer.ids_to_text(targets[i, : targets_lengths[i]].tolist()) for i in range(batch_size)]
+        # log first hypothesis and reference
         logging.info(f"val ref: {refs_str[0]}")
         logging.info(f"val hyp: {hyps_str[0]}")
+        # compute wer and components
         self.val_wer[dataloader_idx].update(preds=hyps_str, target=refs_str)
 
     def on_validation_start(self):
-        # reset validation metric
+        # reset validation metric when the validation starts
         for submodule in self.val_wer:
             submodule.reset()
 
     def multi_validation_epoch_end(self, outputs: List[Dict[str, torch.Tensor]], dataloader_idx: int = 0):
+        """
+        Aggregate wer metric for all validation dataloader
+        (first dataloader is used for checkpoint selection, other - only for logging)
+        """
         wer_detailed = self.val_wer[dataloader_idx].compute()
         if wer_detailed["wer"].isnan():
             # when resuming the function can be called without real validation for all datasets,
@@ -233,14 +245,14 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         }
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        # return hypotheses predicted from the audio
+        """Return hypotheses predicted from the audio"""
         audio, audio_lengths, targets, targets_lengths = batch
         encoded_audio, encoded_audio_lengths = self.forward(audio=audio, audio_lengths=audio_lengths)
         hyps = self.decoding.greedy_decode(encoder_output=encoded_audio, encoder_lengths=encoded_audio_lengths)
         return hyps
 
     def setup_training_data(self, train_data_config: Union[DictConfig, Dict]):
-        """Derived from NeMo"""
+        """Training data setup: derived from NeMo to reuse dataloaders"""
         train_data_config["shuffle"] = True
         self._update_dataset_config(dataset_name="train", config=train_data_config)
         self._train_dl = self._setup_dataloader_from_config(config=train_data_config)
@@ -257,22 +269,33 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
                 )
 
     def setup_multiple_validation_data(self, val_data_config: Union[DictConfig, Dict]):
+        """Setup multiple validation data, similar to NeMo models"""
         super().setup_multiple_validation_data(val_data_config=val_data_config)
         num_val_loaders = len(self._validation_dl) if isinstance(self._validation_dl, list) else 1
+        # init val_wer metrics
         self.val_wer = nn.ModuleList([ExtendedWordErrorRate(dist_sync_on_step=True) for _ in range(num_val_loaders)])
 
     def setup_validation_data(self, val_data_config: Union[DictConfig, Dict]):
+        """Setup validation data, similar to NeMo models"""
+        # avoid shuffling manifest - fixed order of utterances
         val_data_config["shuffle"] = False
+        # store dataset config
         self._update_dataset_config(dataset_name="validation", config=val_data_config)
+        # get dataloader
         self._validation_dl = self._setup_dataloader_from_config(config=val_data_config)
 
     def setup_test_data(self, test_data_config: Union[DictConfig, Dict]):
+        """Setup test data, similar to NeMo models"""
+        # avoid shuffling manifest - fixed order of utterances
         test_data_config["shuffle"] = False
+        # store config
         self._update_dataset_config(dataset_name="test", config=test_data_config)
+        # get dataloader
         self._test_dl = self._setup_dataloader_from_config(config=test_data_config)
 
     def _setup_dataloader_from_config(self, config: Optional[Dict]):
-        """Taken from NeMo ASR Model as described above"""
+        """Taken from NeMo ASR Model as described above to reuse dataloaders"""
+        # get dataset
         dataset = audio_to_text_dataset.get_audio_to_text_bpe_dataset_from_config(
             config=config,
             local_rank=self.local_rank,
@@ -285,29 +308,37 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         if dataset is None:
             return None
 
+        # fix for shuffling: if dataset is iterable - no shuffling
         shuffle = config["shuffle"]
         if isinstance(dataset, torch.utils.data.IterableDataset):
             shuffle = False
 
+        # use collate fn from the dataset or the dataset which is a combination of other datasets
         if hasattr(dataset, "collate_fn"):
             collate_fn = dataset.collate_fn
         elif hasattr(dataset.datasets[0], "collate_fn"):
-            # support datasets that are lists of entries
+            # dataset -> list of datasets
             collate_fn = dataset.datasets[0].collate_fn
         else:
-            # support datasets that are lists of lists
+            # dataset -> list of datasets -> list of datasets
             collate_fn = dataset.datasets[0].datasets[0].collate_fn
 
+        # instantiate and return dataloader
+        batch_size = config["batch_size"]
         return torch.utils.data.DataLoader(
             dataset=dataset,
-            batch_size=config["batch_size"],
+            batch_size=batch_size,
             collate_fn=collate_fn,
-            drop_last=config.get("drop_last", False),
+            drop_last=False,
             shuffle=shuffle,
             num_workers=config.get("num_workers", 0),
-            pin_memory=config.get("pin_memory", False),
+            pin_memory=config.get("pin_memory", True),
         )
 
     def transcribe(self, paths2audio_files: List[str], batch_size: int = 4, verbose: bool = True) -> List[str]:
-        """We avoid implementing transcribe function, since for our project we need only validation logic"""
+        """
+        We avoid implementing transcribe function for NeMo model,
+        since for our project we need only validation/testing logic.
+        We also have a predict_step that returns hypotheses
+        """
         raise NotImplementedError
