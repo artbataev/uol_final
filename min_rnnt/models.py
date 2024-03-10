@@ -156,6 +156,8 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         detailed_logs["learning_rate"] = self._optimizer.param_groups[0]["lr"]
         detailed_logs["global_step"] = self.trainer.global_step
         sample_id = self.trainer.global_step
+
+        # for monitoring training: compute WER and components on training data
         if sample_id % self.trainer.log_every_n_steps == 0:
             # decode and log in training
             with torch.no_grad():
@@ -185,14 +187,18 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
         return {"loss": loss_value}
 
     def on_train_epoch_start(self) -> None:
+        """Apply token decay for the penalty"""
         if self.cfg.loss.loss_name in {"bypass_t", "trt"}:
             initial_skip_token_penalty = self.cfg.loss.get("skip_token_penalty", 0.0)
             if self.trainer.current_epoch > self.skip_token_decay_min_epoch:
+                # compute penalty = initial_penalty * (decay ^ (epoch - start_decay_epoch))
                 self.loss.skip_token_penalty = initial_skip_token_penalty * (
                     self.skip_token_decay ** (self.trainer.current_epoch - self.skip_token_decay_min_epoch)
                 )
+                # respect maximum token penalty
                 if self.loss.skip_token_penalty > self.skip_token_penalty_end:
                     self.loss.skip_token_penalty = self.skip_token_penalty_end
+            # log penalty
             self.log("skip_token_penalty", self.loss.skip_token_penalty)
 
     def validation_step(self, batch, batch_nb, dataloader_idx=0):
