@@ -1,5 +1,9 @@
 """Script for generating artificially corrupted data based on NeMo manifests."""
 
+# This is the part of the Final Project
+# "RNN-Transducer-based Losses for Speech Recognition on Noisy Targets"
+# Originally published in https://github.com/artbataev/uol_final
+
 import argparse
 import itertools
 import random

@@ -1,3 +1,7 @@
+# This is the part of the Final Project
+# "RNN-Transducer-based Losses for Speech Recognition on Noisy Targets"
+# Originally published in https://github.com/artbataev/uol_final
+
 import pytorch_lightning as pl
 from nemo.core.config import hydra_runner
 from nemo.utils import logging
