@@ -29,6 +29,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         skip_frame_penalty: float = 0.0,
         skip_token_penalty: float = 0.0,
         skip_token_mode: str = "sumexcl",
+        return_graph: bool = False,
         use_grid_implementation=True,
         connect_composed=False,
         double_scores=False,
@@ -42,6 +43,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         :param skip_token_penalty: weight of skip token transition, 0 means no penalty
         :param skip_token_mode: mode to assign weight to skip token transition,
                 options "sumexcl" (default, found to be best), "maxexcl", "sum", "mean", "const"
+        :param return_graph: return graph with loss from forward (False by default)
         :param use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
         :param connect_composed: Connect graph after composing unit and temporal schemas
                 (only for Compose-Transducer). `connect` operation is slow, it is useful for visualization,
@@ -62,6 +64,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         self.skip_frame_id_rel = 0  # skip_frame_id = vocab_size + 0
         self.skip_token_id_rel = 1  # skip_token_id = vocab_size + 1
         self.skip_token_mode = skip_token_mode
+        self.return_graph = return_graph
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
         """
@@ -398,4 +401,6 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
 
             # compute loss: full-sum loss using k2 graph method
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
+            if self.return_graph:
+                return scores, target_fsas_vec
             return scores
