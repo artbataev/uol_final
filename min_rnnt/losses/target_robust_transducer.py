@@ -170,6 +170,10 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         return fsa_temporal
 
     def get_grid(self, units_tensor: torch.Tensor, num_frames: int, vocab_size: int) -> "k2.Fsa":
+        """
+        Directly construct lattice for Target-Robust-Transducer
+        We use grid labeled enumerated by rows/columns
+        """
         blank_id = self.blank
         skip_frame_id = vocab_size + self.skip_frame_id_rel
         skip_token_id = vocab_size + self.skip_token_id_rel
@@ -233,9 +237,9 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         olabels = olabels[indices]
         unit_positions = unit_positions[indices]
 
-        rnnt_graph = k2.Fsa(sorted_arcs, olabels)
-        rnnt_graph.unit_positions = unit_positions
-        return rnnt_graph
+        trt_graph = k2.Fsa(sorted_arcs, olabels)
+        trt_graph.unit_positions = unit_positions
+        return trt_graph
 
     def forward(
         self,
@@ -252,7 +256,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         # self._loss(acts=log_probs, labels=targets, act_lens=input_lengths, label_lens=target_lengths)
         logits, targets, logits_lengths, target_lengths = acts, labels, act_lens, label_lens
 
-        # logits: B x Time x Text+1 x C
+        # logits: Batch x Time x TextUnits+1 x Vocab
         vocab_size = logits.shape[-1]
         batch_size = logits.shape[0]
         device = logits.device
@@ -371,6 +375,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                     scores = torch.where(skip_token_transition_mask, sum_scores, scores)
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case _:
+                    # reserved for future experiments
                     raise NotImplementedError
 
             target_fsas_vec.scores = scores

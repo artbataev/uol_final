@@ -212,9 +212,9 @@ class GraphStarTransducerLoss(GraphRnntLoss):
         olabels = olabels[indices]
         unit_positions = unit_positions[indices]
 
-        rnnt_graph = k2.Fsa(sorted_arcs, olabels)
-        rnnt_graph.unit_positions = unit_positions
-        return rnnt_graph
+        start_graph = k2.Fsa(sorted_arcs, olabels)
+        start_graph.unit_positions = unit_positions
+        return start_graph
 
     def forward(
         self,
@@ -276,7 +276,7 @@ class GraphStarTransducerLoss(GraphRnntLoss):
                 unit_indices.masked_fill_(skip_frame_transition_mask, 0)
                 text_units.masked_fill_(skip_frame_transition_mask, 0)
 
-            # fill in transition scroes
+            # fill in transition scores
             scores = log_probs[batch_indices, time_indices, unit_indices, text_units]
             # fix weights for the transitions to the last state (special for k2)
             scores[last_transition_mask] = 0
