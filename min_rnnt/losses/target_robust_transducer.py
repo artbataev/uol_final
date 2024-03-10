@@ -44,7 +44,7 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         :param skip_frame_penalty: weight of epsilon transitions, 0 means no penalty (default)
         :param skip_token_penalty: weight of skip token transition, 0 means no penalty
         :param skip_token_mode: mode to assign weight to skip token transition,
-                options "sumexcl" (default, found to be best), "maxexcl", "meanexcl", "sum", "mean", "const"
+                options "sumexcl" (default, found to be best), "maxexcl", "sum", "mean", "const"
         :param use_grid_implementation: Whether to use the grid implementation (Grid-Transducer).
         :param connect_composed: Connect graph after composing unit and temporal schemas
                 (only for Compose-Transducer). `connect` operation is slow, it is useful for visualization,
@@ -369,34 +369,6 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                     sum_logprobs = torch.logsumexp(log_probs_modified[..., : self.blank], dim=-1, keepdim=False)
                     sum_scores = sum_logprobs[batch_indices, time_indices, unit_indices]
                     scores = torch.where(skip_token_transition_mask, sum_scores, scores)
-                    scores[skip_token_transition_mask] += self.skip_token_penalty
-                case "meanexcl":
-                    device = log_probs.device
-                    max_text_len = log_probs.shape[2] - 1
-                    # assert max_text_len == target_lengths.max()
-                    batch_indices_f = (
-                        torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, max_text_len).flatten()
-                    )
-                    unit_position_indices_f = (
-                        torch.arange(max_text_len, device=device)
-                        .unsqueeze(0)
-                        .expand(batch_size, max_text_len)
-                        .flatten()
-                    )
-                    text_units_f = targets.flatten()
-                    log_probs_modified = log_probs.clone()
-                    log_probs_modified[batch_indices_f, :, unit_position_indices_f, text_units_f] = float("-inf")
-                    log_probs_modified[
-                        batch_indices_f,
-                        :,
-                        unit_position_indices_f,
-                        torch.full_like(text_units_f, fill_value=self.blank),
-                    ] = float("-inf")
-                    mean_logprobs = torch.logsumexp(
-                        log_probs_modified[..., : self.blank], dim=-1, keepdim=False
-                    ) - math.log(vocab_size - 2)
-                    mean_scores = mean_logprobs[batch_indices, time_indices, unit_indices]
-                    scores = torch.where(skip_token_transition_mask, mean_scores, scores)
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case _:
                     raise NotImplementedError

@@ -41,7 +41,7 @@ class TestBypassTransducerLoss:
         assert k2.is_rand_equivalent(composed_lattice, grid_lattice, log_semiring=True)
 
     @pytest.mark.parametrize("use_grid_implementation", [False, True])
-    @pytest.mark.parametrize("skip_token_mode", ["sumexcl", "constant", "mean", "max", "maxexcl", "meanexcl"])
+    @pytest.mark.parametrize("skip_token_mode", ["sumexcl", "constant", "mean", "max", "maxexcl"])
     def test_match_rnnt_inf_penalty(self, use_grid_implementation: bool, skip_token_mode: str):
         """When skip token penalty is -inf, the loss and gradient should be equivalent to RNN-T"""
         vocab_size = 10
