@@ -51,6 +51,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             self.text_pad_id = self.tokenizer.pad_id
         else:
             self.text_pad_id = vocabulary_size
+        # blank index - last (after vocabulary), convention for NeMo models
         self.blank_index = vocabulary_size
 
         super().__init__(cfg=cfg, trainer=trainer)
@@ -105,6 +106,7 @@ class MinRNNTModel(ASRModel, ASRBPEMixin):
             )
         elif self.cfg.loss.loss_name == "trt":
             # original: Target Robust Transducer loss
+            # parameters: combination of Star- and Bypass-Transducer params
             self.loss = GraphTargetRobustTransducerLoss(
                 blank=self.blank_index,
                 skip_frame_penalty=self.cfg.loss.get("skip_frame_penalty", 0.0),
