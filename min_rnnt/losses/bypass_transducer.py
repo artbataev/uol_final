@@ -136,6 +136,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
 
         # construct FSA
         fsa_temporal_bypasst = k2.Fsa(temporal_transitions, olabels)
+        # sort arcs - necessary for composition
         fsa_temporal_bypasst = k2.arc_sort(fsa_temporal_bypasst)
         return fsa_temporal_bypasst
 
@@ -208,6 +209,7 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
         olabels = olabels[indices]
         unit_positions = unit_positions[indices]
 
+        # construct lattice
         bypasst_graph = k2.Fsa(sorted_arcs, olabels)
         bypasst_graph.unit_positions = unit_positions
         return bypasst_graph
