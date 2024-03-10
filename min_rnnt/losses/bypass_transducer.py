@@ -2,7 +2,6 @@
 # "RNN-Transducer-based Losses for Speech Recognition on Noisy Targets"
 # Originally published in https://github.com/artbataev/uol_final
 
-import math
 from contextlib import nullcontext
 
 import k2
@@ -335,7 +334,6 @@ class GraphBypassTransducerLoss(GraphRnntLoss):
                 case "sumexcl":
                     device = log_probs.device
                     max_text_len = log_probs.shape[2] - 1
-                    # assert max_text_len == target_lengths.max()
 
                     # idea: copy log probs, assign -inf to target and blank labels, get logsumexp
                     log_probs_modified = log_probs.clone()

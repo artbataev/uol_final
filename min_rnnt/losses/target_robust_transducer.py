@@ -2,7 +2,6 @@
 # "RNN-Transducer-based Losses for Speech Recognition on Noisy Targets"
 # Originally published in https://github.com/artbataev/uol_final
 
-import math
 import random
 from contextlib import nullcontext
 
@@ -35,7 +34,6 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         connect_composed=False,
         double_scores=False,
         cast_to_float32=False,
-        use_alignment_prob=0.0,
     ):
         """
         Init method
@@ -65,7 +63,6 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
         self.skip_frame_id_rel = 0  # skip_frame_id = vocab_size + 0
         self.skip_token_id_rel = 1  # skip_token_id = vocab_size + 1
         self.skip_token_mode = skip_token_mode
-        self.use_alignment_prob = use_alignment_prob
 
     def get_unit_schema(self, units_tensor: torch.Tensor, vocab_size: int) -> "k2.Fsa":
         """
@@ -271,12 +268,17 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
 
         cast_context = force_float32_context() if self.cast_to_float32 else nullcontext()
         with cast_context:
+            # use activation: log softmax (log probabilities - output of Joint)
             log_probs = F.log_softmax(logits, dim=-1)
             with torch.no_grad():
+                # mask for last transition - for all graphs
                 last_transition_mask = target_fsas_vec.labels == -1
+                # mask for skip token transitions - for all graphs
                 skip_token_transition_mask = target_fsas_vec.labels == skip_token_id
+                # mask for skip frame transitions - for all graphs
                 skip_frame_transition_mask = target_fsas_vec.labels == skip_frame_id
 
+                # batch indices for all graph transitions
                 batch_indices = torch.repeat_interleave(
                     torch.arange(batch_size, device=device, dtype=torch.int64),
                     torch.tensor(
@@ -297,19 +299,23 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                 # skip frames transitions
                 text_units.masked_fill_(skip_frame_transition_mask, 0)
 
-            # NB: do not assign scores -> modify, k2 will not update all scores correctly (modify -> assign)
+            # fill in transition scores
             scores = log_probs[batch_indices, time_indices, unit_indices, text_units]
-            # fix weights for the arcs to the last state
+            # fix weights for the transitions to the last state (special for k2)
             scores[last_transition_mask] = 0
-
+            # skip frame penalty - assign constant
             scores[skip_frame_transition_mask] = self.skip_frame_penalty
 
-            assert self.blank == vocab_size - 1
+            assert self.blank == vocab_size - 1  # convention for RNN-T models in NeMo, blank is the last
+            # assign skip token penalty, similar to Bypass-Transducer loss
             match self.skip_token_mode:
                 case "constant":
+                    # simple constant assignment
                     scores[skip_token_transition_mask] = self.skip_token_penalty
                 case "mean":
-                    # similar to OTC implemenetation: https://github.com/k2-fsa/icefall/blob/master/egs/librispeech/WSASR/conformer_ctc2/train.py#L568
+                    # similar to OTC implemenetation:
+                    # https://github.com/k2-fsa/icefall/blob/master/egs/librispeech/WSASR/conformer_ctc2/train.py#L568
+                    # logsumexp for all logits before blank
                     mean_logprob = torch.logsumexp(log_probs[..., : self.blank], dim=-1, keepdim=False) - torch.log(
                         torch.full([batch_size], fill_value=vocab_size - 1, device=log_probs.device)
                         .unsqueeze(-1)
@@ -317,15 +323,23 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                     )
                     mean_scores = mean_logprob[batch_indices, time_indices, unit_indices]
                     scores = torch.where(skip_token_transition_mask, mean_scores, scores)
+                    # add constant penalty
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case "max":
+                    # maximum log probability for all outputs excluding blank
                     max_logprob, _ = log_probs[..., : self.blank].max(dim=-1, keepdim=False)
                     max_scores = max_logprob[batch_indices, time_indices, unit_indices]
                     scores = torch.where(skip_token_transition_mask, max_scores, scores)
+                    # add constant penalty
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case "maxexcl":
+                    # maximum log probability for all outputs excluding blank and target token
                     device = log_probs.device
                     max_text_len = log_probs.shape[2] - 1
+                    # idea: copy log probs, assign -inf to target and blank labels, get maximum
+                    log_probs_modified = log_probs.clone()
+
+                    # indexing for logits
                     batch_indices_f = (
                         torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, max_text_len).flatten()
                     )
@@ -336,22 +350,28 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                         .flatten()
                     )
                     text_units_f = targets.flatten()
-                    log_probs_modified = log_probs.clone()
+                    # assign -inf to target units
                     log_probs_modified[batch_indices_f, :, unit_position_indices_f, text_units_f] = float("-inf")
+                    # assign -inf to blank units
                     log_probs_modified[
                         batch_indices_f,
                         :,
                         unit_position_indices_f,
                         torch.full_like(text_units_f, fill_value=self.blank),
                     ] = float("-inf")
+                    # get maximum
                     max_logprob, _ = log_probs_modified[..., : self.blank].max(dim=-1, keepdim=False)
                     max_scores = max_logprob[batch_indices, time_indices, unit_indices]
                     scores = torch.where(skip_token_transition_mask, max_scores, scores)
+                    # add constant penalty
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case "sumexcl":
                     device = log_probs.device
                     max_text_len = log_probs.shape[2] - 1
-                    # assert max_text_len == target_lengths.max()
+
+                    # idea: copy log probs, assign -inf to target and blank labels, get logsumexp
+                    log_probs_modified = log_probs.clone()
+                    # indexing for logits
                     batch_indices_f = (
                         torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, max_text_len).flatten()
                     )
@@ -362,44 +382,28 @@ class GraphTargetRobustTransducerLoss(GraphRnntLoss):
                         .flatten()
                     )
                     text_units_f = targets.flatten()
-                    log_probs_modified = log_probs.clone()
+                    # assign -inf to target units
                     log_probs_modified[batch_indices_f, :, unit_position_indices_f, text_units_f] = float("-inf")
+                    # assign -inf to blank units
                     log_probs_modified[
                         batch_indices_f,
                         :,
                         unit_position_indices_f,
                         torch.full_like(text_units_f, fill_value=self.blank),
                     ] = float("-inf")
+                    # get log sum exp
                     sum_logprobs = torch.logsumexp(log_probs_modified[..., : self.blank], dim=-1, keepdim=False)
                     sum_scores = sum_logprobs[batch_indices, time_indices, unit_indices]
                     scores = torch.where(skip_token_transition_mask, sum_scores, scores)
+                    # add constant penalty
                     scores[skip_token_transition_mask] += self.skip_token_penalty
                 case _:
                     # reserved for future experiments
                     raise NotImplementedError
 
+            # assign scores to graphs
             target_fsas_vec.scores = scores
-            if self.use_alignment_prob > 0.0 and random.random() < self.use_alignment_prob:
-                shortest_paths = k2.shortest_path(target_fsas_vec, use_double_scores=True)
-                shortest_paths_batch_indices = torch.repeat_interleave(
-                    torch.arange(batch_size, device=device, dtype=torch.int64),
-                    torch.tensor(
-                        [shortest_paths.arcs.index(0, i)[0].values().shape[0] for i in range(batch_size)],
-                        device=device,
-                    ),
-                )
-                aligned_to_special_tokens = torch.logical_or(
-                    shortest_paths.labels == skip_frame_id, shortest_paths.labels == skip_token_id
-                )
-                aligned_batch_indices = (
-                    torch.unique((shortest_paths_batch_indices + 1) * aligned_to_special_tokens) - 1
-                )
-                aligned_batch_indices_set = set(aligned_batch_indices.tolist())
-                not_aligned_batch_indices_set = set(range(batch_size)) - aligned_batch_indices_set
-                not_aligned_batch_indices = torch.tensor(list(not_aligned_batch_indices_set), device=device)
-                batch_mask = (batch_indices.unsqueeze(0) == not_aligned_batch_indices.unsqueeze(-1)).any(dim=0)
-                skip_transition_mask = torch.logical_or(skip_token_transition_mask, skip_frame_transition_mask)
-                scores[torch.logical_and(skip_transition_mask, batch_mask)] = float("-inf")
-                target_fsas_vec.scores = scores
+
+            # compute loss: full-sum loss using k2 graph method
             scores = -1 * target_fsas_vec.get_tot_scores(use_double_scores=self.double_scores, log_semiring=True)
             return scores
